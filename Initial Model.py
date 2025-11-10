@@ -1,20 +1,3 @@
-"""
-Simulate 3-dart turns aimed at T20 for average bins (30-39, 40-49, ... 110+).
-
-How it works:
-- Reads CSVs in the same folder and computes per-file:
-  - average, total aimed-at-T20 throws, hits (bed == 't20'), misses and miss-bed counts
-- Fits a weighted linear regression: average -> hit_rate (weights = aimed-at-T20 throws)
-- Aggregates miss-bed distribution conditional on a miss
-- For each average bin, predicts hit probability, then runs Monte Carlo simulations of 3 darts per turn
-- Outputs expected hits per turn, probability of 0/1/2/3 hits, and miss-bed breakdown
-
-Run:
-    python simulate_t20_by_average.py
-
-Options / tuning at top of file.
-"""
-
 import os
 import csv
 import json
@@ -31,7 +14,7 @@ BIN_WIDTH = 10
 OUTPUT_JSON = os.path.join(FOLDER, 'simulation_results.json')
 SAMPLE_TURNS_PER_BIN = 100  # how many simulated turns to save per bin (for inspection)
 
-# Helper: read CSVs and compute per-file stats
+# Read CSVs and compute per-file stats
 files = [f for f in os.listdir(FOLDER) if f.lower().endswith(CSV_GLOB)]
 records = []  # (fname, average, aimed_count, hit_count, miss_bed_counter)
 
