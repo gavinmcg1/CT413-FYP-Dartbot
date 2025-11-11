@@ -359,6 +359,52 @@ def compute_success_prob_for_seq_given_T(seq, T, bin_label):
             break
     return success
 
+# Calculate "safety" score: how forgiving is this sequence if you miss?
+# Higher safety means neighbors leave you in a better position for finishing
+def calculate_safety_score(seq, T):
+    """
+    Estimate safety by checking: if you miss the first dart by hitting a neighbor,
+    what's the probability the remaining sequence can still checkout?
+    """
+    if len(seq) < 2:
+        return 1.0  # 1-dart finishes have inherent risk
+    
+    first_aim = seq[0].lower()
+    first_score = score_of(first_aim)
+    
+    if first_score == 0:
+        return 0.5  # Unknown first dart
+    
+    # Get neighbors of the first aim
+    target_num = int(first_aim[1:]) if len(first_aim) > 1 and first_aim[1:].isdigit() else None
+    if target_num is None or target_num not in segment_index:
+        return 0.7  # Can't determine neighbors, moderate safety
+    
+    idx = segment_index[target_num]
+    left_num = BOARD_ORDER[(idx - 1) % NUM_SEGMENTS]
+    right_num = BOARD_ORDER[(idx + 1) % NUM_SEGMENTS]
+    
+    # Calculate neighbor scores
+    neighbor_first_type = first_aim[0]  # t, d, i, or o
+    left_score = score_of(f'{neighbor_first_type}{left_num}')
+    right_score = score_of(f'{neighbor_first_type}{right_num}')
+    
+    # If hitting a neighbor still leaves a double on the board, it's safer
+    remaining_after_left = T - left_score
+    remaining_after_right = T - right_score
+    
+    safety = 0.5
+    # Check if remaining scores allow a double finish
+    for n in range(1, 21):
+        if 2*n == remaining_after_left or 2*n == remaining_after_right:
+            safety = 0.9  # Good safety - neighbors leave doubles available
+            break
+        if remaining_after_left in [1, 0] or remaining_after_right in [1, 0]:
+            safety = 0.3  # Poor safety - neighbors bust or can't finish
+            break
+    
+    return safety
+
 # Now run through totals and bins
 results = {}
 summary_rows = []
@@ -371,34 +417,93 @@ for label, rep in bins:
         cand_raw = candidates.get(str(T), []) if isinstance(candidates, dict) else []
         cand_seqs = [parse_candidate_sequence(x) for x in cand_raw] if cand_raw else []
 
-        # If NO candidates provided for this total, fall back to auto enumeration
-        # Otherwise, I will use ONLY candidates as these are the realistic approaches
+        # If no candidates provided for this total, fall back to auto enumeration
+        # Otherwise, I will use only candidates as these are the realistic approaches
         if not cand_seqs:
             model_seqs = enumerate_strategies_for_total(T)
         else:
             model_seqs = cand_seqs
 
-        # evaluate sequences, keeping top 5
+        # evaluate sequences, keeping top 5 by success probability
         scored = []
         for seq in model_seqs:
             prob = compute_success_prob_for_seq_given_T(seq, T, label)
+            # Weight sequences by number of darts: 1 dart > 2 dart > 3 dart
+            if len(seq) == 1:
+                prob_weighted = prob * 1.3  # 30% bonus for one-dart finishes
+            elif len(seq) == 2:
+                prob_weighted = prob * 1.1  # 10% bonus for two-dart finishes
+            else:
+                prob_weighted = prob  # No bonus for three-dart finishes
+
+            # Slightly penalise bull finishes because the bull is a smaller target
+            try:
+                final_aim = seq[-1].lower() if seq else ''
+            except Exception:
+                final_aim = str(seq[-1]).lower() if seq else ''
+            if final_aim == 'ibull':
+                prob_weighted *= 0.85  # 15% penalty for ibull finishes
+            
+            # Penalise 2-dart sequences starting with treble or double (harder to hit than singles)
+            if len(seq) == 2:
+                try:
+                    first_aim = seq[0].lower() if seq else ''
+                except Exception:
+                    first_aim = str(seq[0]).lower() if seq else ''
+                if first_aim.startswith('t') or first_aim.startswith('d'):
+                    prob_weighted *= 0.90  # 10% penalty for starting with treble/double
+            
+            safety = calculate_safety_score(seq, T)
+            
             if prob > 0:
-                scored.append((seq, prob))
-        scored.sort(key=lambda x: -x[1])
+                scored.append({
+                    'sequence': seq,
+                    'success_prob': prob,
+                    'success_prob_weighted': prob_weighted,
+                    'safety': safety,
+                    'is_one_dart': len(seq) == 1
+                })
+        
+        # Sort by weighted probability first, then by safety
+        scored.sort(key=lambda x: (-x['success_prob_weighted'], -x['safety']))
+        
+        # Find best and safest approaches
+        best_seq = scored[0]['sequence'] if scored else None
+        best_prob = scored[0]['success_prob'] if scored else None
+        best_safety = scored[0]['safety'] if scored else None
+        
+        # Find highest safety score
+        safest_seq = max(scored, key=lambda x: x['safety'])['sequence'] if scored else None
         
         results[label][str(T)] = {
-            'top': [{'sequence': s, 'success_prob': p} for s, p in scored[:5]]
+            'best': {
+                'sequence': '|'.join(best_seq) if best_seq else '',
+                'success_prob': best_prob if best_prob is not None else 0,
+                'safety': best_safety if best_safety is not None else 0
+            },
+            'safest': {
+                'sequence': '|'.join(safest_seq) if safest_seq else '',
+                'safety': max([s['safety'] for s in scored]) if scored else 0
+            },
+            'top_5': [
+                {
+                    'sequence': s['sequence'],
+                    'success_prob': s['success_prob'],
+                    'safety': s['safety'],
+                    'is_one_dart': s['is_one_dart']
+                } 
+                for s in scored[:5]
+            ]
         }
 
         # add best to CSV summary
-        best_seq = scored[0][0] if scored else None
-        best_p = scored[0][1] if scored else None
         summary_rows.append({
             'bin': label,
             'avg_rep': rep,
             'total': T,
             'best_sequence': '|'.join(best_seq) if best_seq else '',
-            'success_prob': best_p if best_p is not None else ''
+            'best_success_prob': best_prob if best_prob is not None else '',
+            'safest_sequence': '|'.join(safest_seq) if safest_seq else '',
         })
 
 # write outputs
@@ -406,7 +511,7 @@ with open(OUTPUT_JSON, 'w', encoding='utf-8') as fh:
     json.dump({'bins': results}, fh, indent=2)
 
 with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8') as fh:
-    writer = csv.DictWriter(fh, fieldnames=['bin','avg_rep','total','best_sequence','success_prob'])
+    writer = csv.DictWriter(fh, fieldnames=['bin','avg_rep','total','best_sequence','best_success_prob','safest_sequence'])
     writer.writeheader()
     for r in summary_rows:
         writer.writerow(r)
