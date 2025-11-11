@@ -158,8 +158,8 @@ for n in range(1,21):
 all_aims.append('obull')
 all_aims.append('ibull')
 
-# prioritized aims for first darts in 3-dart sequences (common trebles and high singles)
-prioritized_aims = [f't{n}' for n in range(20,11,-1)] + [f'o{n}' for n in [20,19,18,17,16,15,14]] + [f'i{n}' for n in [20,19,18,17,16,15,14]]
+# prioritised aims for first darts in 3-dart sequences (common trebles and high singles)
+prioritised_aims = [f't{n}' for n in range(20,11,-1)] + [f'o{n}' for n in [20,19,18,17,16,15,14]] + [f'i{n}' for n in [20,19,18,17,16,15,14]]
 
 # Build P(actual_bed|aim, avg)
 # if empirical samples for aim >= MIN_EMPIRICAL_SAMPLES then use empirical distribution
@@ -227,7 +227,7 @@ while start <= BIN_END - BIN_WIDTH:
 bins.append((f"{BIN_END}+", BIN_END + BIN_WIDTH/2.0))
 
 # For performance, precompute distributions for aim targets and bins
-aim_targets_to_consider = set(list(aim_empirical.keys()) + all_aims + prioritized_aims)
+aim_targets_to_consider = set(list(aim_empirical.keys()) + all_aims + prioritised_aims)
 
 aim_targets_to_consider = {a.lower() for a in aim_targets_to_consider}
 
@@ -266,55 +266,6 @@ def parse_candidate_sequence(item):
             parts = item.split(',')
         return [p.strip().lower() for p in parts if p.strip()]
     return []
-
-# Enumerate strategies and compute exact success probability using DP per sequence
-# For each total T, we will consider sequences of length 1,2,3 where final aimed is a double (including ibull)
-
-def enumerate_strategies_for_total(T):
-    strategies = []  # list of lists of aimed targets
-    # 1-dart: need a double equal to T
-    for n in range(1,21):
-        if 2*n == T:
-            strategies.append([f'd{n}'])
-    if T == 50:
-        strategies.append(['ibull'])
-    # 2-dart: Find a first dart that leaves a double
-    aims_pool = list(dict.fromkeys(prioritized_aims + all_aims + ['obull','ibull']))
-    aims_by_score = defaultdict(list)
-    for aim in aims_pool:
-        aims_by_score[score_of(aim)].append(aim)
-    for n in range(1,21):
-        dname = f'd{n}'
-        dscore = 2*n
-        if dscore >= T:
-            continue
-        need = T - dscore
-        for aim in aims_by_score.get(need, []):
-            strategies.append([aim, dname])
-    # 3-dart: a1 from prioritized_aims + all_aims, a2 from aims_by_score, a final double
-    for n in range(1,21):
-        dname = f'd{n}'
-        dscore = 2*n
-        if dscore >= T:
-            continue
-        need12 = T - dscore
-        possible_firsts = list(dict.fromkeys(prioritized_aims + all_aims))
-        for a1 in possible_firsts:
-            s1 = score_of(a1)
-            if s1 > need12:
-                continue
-            rem = need12 - s1
-            for a2 in aims_by_score.get(rem, []):
-                strategies.append([a1, a2, dname])
-    # dedupe
-    uniq = []
-    seen = set()
-    for s in strategies:
-        key = tuple(s)
-        if key not in seen:
-            seen.add(key)
-            uniq.append(s)
-    return uniq # returns only unique sequences
 
 # DP probability computation for a given sequence and bin (using precomputed distributions)
 
@@ -359,13 +310,9 @@ def compute_success_prob_for_seq_given_T(seq, T, bin_label):
             break
     return success
 
-# Calculate "safety" score: how forgiving is this sequence if you miss?
+# Calculate "safety" score: how forgiving is this sequence if you miss the first dart
 # Higher safety means neighbors leave you in a better position for finishing
 def calculate_safety_score(seq, T):
-    """
-    Estimate safety by checking: if you miss the first dart by hitting a neighbor,
-    what's the probability the remaining sequence can still checkout?
-    """
     if len(seq) < 2:
         return 1.0  # 1-dart finishes have inherent risk
     
@@ -416,13 +363,7 @@ for label, rep in bins:
         # determine candidate sequences from checkout candidates file
         cand_raw = candidates.get(str(T), []) if isinstance(candidates, dict) else []
         cand_seqs = [parse_candidate_sequence(x) for x in cand_raw] if cand_raw else []
-
-        # If no candidates provided for this total, fall back to auto enumeration
-        # Otherwise, I will use only candidates as these are the realistic approaches
-        if not cand_seqs:
-            model_seqs = enumerate_strategies_for_total(T)
-        else:
-            model_seqs = cand_seqs
+        model_seqs = cand_seqs
 
         # evaluate sequences, keeping top 5 by success probability
         scored = []
@@ -498,7 +439,7 @@ for label, rep in bins:
 
         # add best to CSV summary
         summary_rows.append({
-            'bin': label,
+            'average_level': label,
             'avg_rep': rep,
             'total': T,
             'best_sequence': '|'.join(best_seq) if best_seq else '',
@@ -511,7 +452,7 @@ with open(OUTPUT_JSON, 'w', encoding='utf-8') as fh:
     json.dump({'bins': results}, fh, indent=2)
 
 with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8') as fh:
-    writer = csv.DictWriter(fh, fieldnames=['bin','avg_rep','total','best_sequence','best_success_prob','safest_sequence'])
+    writer = csv.DictWriter(fh, fieldnames=['average_level','avg_rep','total','best_sequence','best_success_prob','safest_sequence'])
     writer.writeheader()
     for r in summary_rows:
         writer.writerow(r)

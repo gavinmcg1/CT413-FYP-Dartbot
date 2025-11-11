@@ -1,4 +1,4 @@
-bin,avg_rep,total,best_sequence,best_success_prob,safest_sequence
+average_level,avg_rep,total,best_sequence,best_success_prob,safest_sequence
 30-39,34.5,2,d1,0.05714285714285714,d1
 30-39,34.5,3,o1|d1,0.03333333333333333,o1|d1
 30-39,34.5,4,o2|d1,0.23449689331771595,d2
