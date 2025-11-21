@@ -5,8 +5,11 @@ from collections import defaultdict, Counter
 
 # Configuration
 FOLDER = os.path.dirname(os.path.abspath(__file__))
+DATA_FOLDER = os.path.join(FOLDER, 'Datasets')  # location for player input CSVs
 OUTPUT_JSON = os.path.join(FOLDER, 'checkout_simulation_results.json')
 OUTPUT_CSV = os.path.join(FOLDER, 'checkout_simulation_summary.csv')
+DOUBLES_JSON = os.path.join(FOLDER, 'double_outcomes.json')
+DOUBLES_CSV = os.path.join(FOLDER, 'double_outcomes.csv')
 BIN_START = 30
 BIN_END = 110
 BIN_WIDTH = 10
@@ -16,6 +19,21 @@ MIN_EMPIRICAL_SAMPLES = 10  # minimum aimed at samples to use empirical distribu
 BOARD_ORDER = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5] # store dartboard ordering clockwise to find realistic neighbours
 NUM_SEGMENTS = len(BOARD_ORDER)
 segment_index = {n: i for i, n in enumerate(BOARD_ORDER)}
+
+# map an average to bin label (e.g., 30-39)
+def bin_label_for_avg(avg: float):
+    if avg is None:
+        return None
+    if avg < BIN_START:
+        low = BIN_START
+        high = BIN_START + BIN_WIDTH - 1
+        return f"{low}-{high}"
+    for start in range(BIN_START, BIN_END, BIN_WIDTH):
+        low = start
+        high = start + BIN_WIDTH - 1
+        if low <= avg <= high:
+            return f"{low}-{high}"
+    return f"{BIN_END}+"
 
 # score mapping - converting everything into numeric points
 def score_of(bed):
@@ -39,17 +57,6 @@ def score_of(bed):
             return int(bed[1:])
         except:
             return 0
-    # sometimes data uses old 's20' format; treat as single 20
-    if bed.startswith('s'):
-        try:
-            return int(bed[1:])
-        except:
-            return 0
-    if bed[0].isdigit():
-        try:
-            return int(bed)
-        except:
-            return 0
     # unknown
     return 0
 
@@ -63,13 +70,19 @@ def is_double(bed):
     return bed.startswith('d')
 
 # Read CSVs to build empirical distributions and per-file averages
-files = [f for f in os.listdir(FOLDER) if f.lower().endswith('.csv')]
+# Use Datasets/ subfolder if it exists to avoid mixing with output CSVs
+if os.path.isdir(DATA_FOLDER):
+    files = [f for f in os.listdir(DATA_FOLDER) if f.lower().endswith('.csv')]
+else:
+    files = [f for f in os.listdir(FOLDER) if f.lower().endswith('.csv')]
 aim_empirical = defaultdict(Counter)  # how many landed in each bed per aimedat
+# Per bin empirical: bin_label = aimedat = Counter(actual_bed)
+aim_empirical_bins = defaultdict(lambda: defaultdict(Counter))
 aim_counts = Counter()  # total aimed at
 per_file_records = []  # headings
 
 for fname in sorted(files):
-    path = os.path.join(FOLDER, fname)
+    path = os.path.join(DATA_FOLDER if os.path.isdir(DATA_FOLDER) else FOLDER, fname)
     try:
         with open(path, newline='', encoding='utf-8') as fh:
             raw = fh.read().splitlines()
@@ -93,6 +106,10 @@ for fname in sorted(files):
             if aimed:
                 aim_empirical[aimed][bed] += 1
                 aim_counts[aimed] += 1
+                # also track per bin using this file's average
+                blabel = bin_label_for_avg(avg)
+                if blabel:
+                    aim_empirical_bins[blabel][aimed][bed] += 1
         # also capture t20 stats for model
         aimed_t20 = sum(1 for r in rows if (r.get('aimedat') or '').strip().lower() == 't20')
         hits_t20 = sum(1 for r in rows if (r.get('aimedat') or '').strip().lower() == 't20' and (r.get('bed') or '').strip().lower() == 't20')
@@ -238,6 +255,182 @@ for label, rep in bins:
         d[aimed] = build_distribution_for_aim(aimed, rep)
     bin_distributions[label] = d
 
+# Compute doubles outcomes per bin: hit double, miss inside (o/i), miss outside (m/bounceout), neighbors (singles/doubles on neighbouring numbers), and other
+def aggregate_double_outcomes(counter: Counter, n: int, label: str):
+    total = sum(counter.values())
+    if total == 0:
+        return {
+            'hit_double': 0.0,
+            'miss_inside': 0.0,
+            'miss_outside': 0.0,
+            'neighbor_singledouble': 0.0,
+            'other': 0.0,
+            'samples': 0
+        }
+    # Neighbors for number n
+    neighbor_nums = []
+    if n in segment_index:
+        idx = segment_index[n]
+        left = BOARD_ORDER[(idx - 1) % NUM_SEGMENTS]
+        right = BOARD_ORDER[(idx + 1) % NUM_SEGMENTS]
+        neighbor_nums = [left, right]
+
+    def is_neighbor_sd(bed: str):
+        if len(bed) < 2:
+            return False
+        typ = bed[0]
+        try:
+            val = int(bed[1:])
+        except:
+            return False
+        return (typ in ('i','o','d')) and (val in neighbor_nums)
+
+    hit = counter.get(f'd{n}', 0)
+    inside = counter.get(f'o{n}', 0) + counter.get(f'i{n}', 0)
+    outside = counter.get(f'm{n}', 0) + counter.get('bounceout', 0) + counter.get('m', 0)
+    neighbor = 0
+    for bed, c in counter.items():
+        if is_neighbor_sd(bed):
+            neighbor += c
+    # Avoid double counting hit/inside/outside within neighbor
+    # Subtract any contributions already counted
+    neighbor -= counter.get(f'd{n}', 0)
+    neighbor -= counter.get(f'o{n}', 0)
+    neighbor -= counter.get(f'i{n}', 0)
+
+    # clamp
+    neighbor = max(0, neighbor)
+
+    covered = hit + inside + outside + neighbor
+    other = max(0, total - covered)
+    return {
+        'hit_double': hit/total,
+        'miss_inside': inside/total,
+        'miss_outside': outside/total,
+        'neighbor_singledouble': neighbor/total,
+        'other': other/total,
+        'samples': total
+    }
+
+def model_double_outcomes(n: int, rep_avg: float, sample_total: int = 0):
+    # Use fallback model distribution and aggregate into categories
+    aimed = f'd{n}'
+    dist = build_distribution_for_aim(aimed, rep_avg)
+    # Neighbors
+    neighbor_nums = []
+    if n in segment_index:
+        idx = segment_index[n]
+        left = BOARD_ORDER[(idx - 1) % NUM_SEGMENTS]
+        right = BOARD_ORDER[(idx + 1) % NUM_SEGMENTS]
+        neighbor_nums = [left, right]
+    def is_neighbor_sd_key(key: str):
+        if len(key) < 2:
+            return False
+        typ = key[0]
+        try:
+            val = int(key[1:])
+        except:
+            return False
+        return (typ in ('i','o','d')) and (val in neighbor_nums)
+    hit = dist.get(f'd{n}', 0.0)
+    inside = dist.get(f'o{n}', 0.0) + dist.get(f'i{n}', 0.0)
+    outside = dist.get(f'm{n}', 0.0) + dist.get('bounceout', 0.0) + dist.get('m', 0.0)
+    # Add small prior for outside miss when modeling (sparse data)
+    outside += 0.02
+    neighbor = sum(p for k, p in dist.items() if is_neighbor_sd_key(k))
+    # subtract any overcounts
+    neighbor -= dist.get(f'd{n}', 0.0)
+    neighbor -= dist.get(f'o{n}', 0.0)
+    neighbor -= dist.get(f'i{n}', 0.0)
+    neighbor = max(0.0, neighbor)
+    covered = hit + inside + outside + neighbor
+    other = max(0.0, 1.0 - covered)
+    return {
+        'hit_double': hit,
+        'miss_inside': inside,
+        'miss_outside': outside,
+        'neighbor_singledouble': neighbor,
+        'other': other,
+        'samples': sample_total  # reflect actual attempts even if modeled
+    }
+
+# Bull specific aggregation
+def aggregate_bull_outcomes(counter: Counter, label: str):
+    total = sum(counter.values())
+    if total == 0:
+        return {
+            'hit_double': 0.0,
+            'miss_inside': 0.0,
+            'miss_outside': 0.0,
+            'neighbor_singledouble': 0.0,
+            'other': 0.0,
+            'samples': 0
+        }
+    hit = counter.get('ibull', 0)
+    inside = counter.get('obull', 0)
+    outside = counter.get('bounceout', 0) + counter.get('m', 0)
+    # Treat any landing on a numbered single/double (i/o/d prefix) as a "neighbor" miss of the bull
+    neighbor = 0
+    for bed, c in counter.items():
+        if bed in ('ibull','obull','bounceout','m'):
+            continue
+        if len(bed) >= 2 and bed[0] in ('i','o','d') and bed[1:].isdigit():
+            neighbor += c
+    covered = hit + inside + outside + neighbor
+    other = max(0, total - covered)
+    return {
+        'hit_double': hit/total,
+        'miss_inside': inside/total,
+        'miss_outside': outside/total,
+        'neighbor_singledouble': neighbor/total,
+        'other': other/total,
+        'samples': total
+    }
+
+def model_bull_outcomes(rep_avg: float, sample_total: int = 0):
+    dist = build_distribution_for_aim('ibull', rep_avg)
+    hit = dist.get('ibull', 0.0)
+    inside = dist.get('obull', 0.0)
+    outside = dist.get('bounceout', 0.0) + dist.get('m', 0.0)
+    outside += 0.02  # small prior outside miss
+    neighbor = 0.0
+    for k, p in dist.items():
+        if k in ('ibull','obull','bounceout','m'):
+            continue
+        if len(k) >= 2 and k[0] in ('i','o','d') and k[1:].isdigit():
+            neighbor += p
+    covered = hit + inside + outside + neighbor
+    other = max(0.0, 1.0 - covered)
+    return {
+        'hit_double': hit,
+        'miss_inside': inside,
+        'miss_outside': outside,
+        'neighbor_singledouble': neighbor,
+        'other': other,
+        'samples': sample_total
+    }
+
+def compute_all_double_outcomes():
+    results = {}
+    for label, rep in bins:
+        results[label] = {}
+        counters = aim_empirical_bins.get(label, {})
+        for n in range(1, 21):
+            c = counters.get(f'd{n}', None)
+            total = sum(counters.get(f'd{n}', Counter()).values()) if counters else 0
+            if total >= MIN_EMPIRICAL_SAMPLES:
+                results[label][f'd{n}'] = aggregate_double_outcomes(counters.get(f'd{n}', Counter()), n, label)
+            else:
+                results[label][f'd{n}'] = model_double_outcomes(n, rep, total)
+        # Add bull as a double outcome
+        c_bull = counters.get('ibull', None)
+        total_bull = sum(counters.get('ibull', Counter()).values()) if counters else 0
+        if total_bull >= MIN_EMPIRICAL_SAMPLES:
+            results[label]['ibull'] = aggregate_bull_outcomes(counters.get('ibull', Counter()), label)
+        else:
+            results[label]['ibull'] = model_bull_outcomes(rep, total_bull)
+    return results
+
 # Load candidate strategies, initially created empty one to input my values
 CAN_PATH = os.path.join(FOLDER, 'checkout_candidates.json')
 if os.path.exists(CAN_PATH):
@@ -245,7 +438,7 @@ if os.path.exists(CAN_PATH):
         with open(CAN_PATH, 'r', encoding='utf-8') as fh:
             candidates = json.load(fh)
     except Exception:
-        print(f"Warning: could not read {CAN_PATH}; continuing with auto-generated strategies")
+        print(f"Warning: could not read {CAN_PATH}, proceeding with empty strategies")
         candidates = {}
 else:
     candidates = {str(t): [] for t in range(2, 171)}
@@ -456,5 +649,26 @@ with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8') as fh:
     writer.writeheader()
     for r in summary_rows:
         writer.writerow(r)
+
+    # Also compute and write doubles outcomes per bin
+    double_outcomes = compute_all_double_outcomes()
+    with open(DOUBLES_JSON, 'w', encoding='utf-8') as fh:
+        json.dump({'bins': double_outcomes}, fh, indent=2)
+
+    with open(DOUBLES_CSV, 'w', newline='', encoding='utf-8') as fh:
+        writer = csv.writer(fh)
+        writer.writerow(['bin','double','hit_double','miss_inside','miss_outside','neighbor_singledouble','other','samples'])
+        for label, doubles in double_outcomes.items():
+            for dname, vals in doubles.items():
+                writer.writerow([
+                    label,
+                    dname,
+                    vals.get('hit_double', 0.0),
+                    vals.get('miss_inside', 0.0),
+                    vals.get('miss_outside', 0.0),
+                    vals.get('neighbor_singledouble', 0.0),
+                    vals.get('other', 0.0),
+                    vals.get('samples', 0)
+                ])
 
 print(f"Checkout simulation done. Results written to {OUTPUT_JSON} and {OUTPUT_CSV}.")
