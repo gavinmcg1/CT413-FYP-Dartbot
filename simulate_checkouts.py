@@ -256,6 +256,63 @@ for label, rep in bins:
     bin_distributions[label] = d
 
 # Compute doubles outcomes per bin: hit double, miss inside (o/i), miss outside (m/bounceout), neighbors (singles/doubles on neighbouring numbers), and other
+def scale_double_outcomes_by_avg(base_outcomes: dict, target_avg: float, dataset_avg: float) -> dict:
+    """
+    Scale pooled double outcomes based on target average vs dataset average.
+    Higher averages increase hit rate, lower averages decrease it.
+    """
+    if slope is None or dataset_avg == 0:
+        return base_outcomes
+    
+    # Use the t20 model multiplier to scale double hit rate
+    base_hit = base_outcomes['hit_double']
+    base_miss_inside = base_outcomes['miss_inside']
+    base_miss_outside = base_outcomes['miss_outside']
+    base_neighbor = base_outcomes['neighbor_singledouble']
+    base_other = base_outcomes['other']
+    
+    # Calculate scaling factor using double multiplier and average difference
+    avg_diff = target_avg - dataset_avg
+    scale_factor = 1.0 + (slope * avg_diff * mult_double)
+    scale_factor = max(0.5, min(2.0, scale_factor))  # Clamp between 0.5x and 2x
+    
+    # Scale hit rate
+    new_hit = min(0.95, base_hit * scale_factor)
+    hit_increase = new_hit - base_hit
+    
+    # Redistribute: take from misses proportionally
+    total_misses = base_miss_inside + base_miss_outside + base_neighbor + base_other
+    if total_misses > 0 and hit_increase != 0:
+        reduction_factor = (total_misses - hit_increase) / total_misses if hit_increase > 0 else (total_misses + abs(hit_increase)) / total_misses
+        reduction_factor = max(0.0, reduction_factor)
+        new_miss_inside = base_miss_inside * reduction_factor
+        new_miss_outside = base_miss_outside * reduction_factor
+        new_neighbor = base_neighbor * reduction_factor
+        new_other = base_other * reduction_factor
+    else:
+        new_miss_inside = base_miss_inside
+        new_miss_outside = base_miss_outside
+        new_neighbor = base_neighbor
+        new_other = base_other
+    
+    # Normalize to ensure sum = 1.0
+    total = new_hit + new_miss_inside + new_miss_outside + new_neighbor + new_other
+    if total > 0:
+        new_hit /= total
+        new_miss_inside /= total
+        new_miss_outside /= total
+        new_neighbor /= total
+        new_other /= total
+    
+    return {
+        'hit_double': new_hit,
+        'miss_inside': new_miss_inside,
+        'miss_outside': new_miss_outside,
+        'neighbor_singledouble': new_neighbor,
+        'other': new_other,
+        'samples': base_outcomes['samples']
+    }
+
 def aggregate_double_outcomes(counter: Counter, n: int, label: str):
     total = sum(counter.values())
     if total == 0:
@@ -354,6 +411,60 @@ def model_double_outcomes(n: int, rep_avg: float, sample_total: int = 0):
         'samples': sample_total  # reflect actual attempts even if modeled
     }
 
+#  Scale pooled double outcomes based on target average vs dataset average. Higher averages increase hit rate, lower averages decrease it.  
+def scale_double_outcomes_by_avg(base_outcomes: dict, target_avg: float, dataset_avg: float) -> dict:
+    if slope is None or dataset_avg == 0:
+        return base_outcomes
+    
+    # Use the t20 model multiplier to scale double hit rate
+    base_hit = base_outcomes['hit_double']
+    base_miss_inside = base_outcomes['miss_inside']
+    base_miss_outside = base_outcomes['miss_outside']
+    base_neighbor = base_outcomes['neighbor_singledouble']
+    base_other = base_outcomes['other']
+    
+    # Calculate scaling factor using double multiplier and average difference
+    avg_diff = target_avg - dataset_avg
+    scale_factor = 1.0 + (slope * avg_diff * mult_double)
+    scale_factor = max(0.5, min(2.0, scale_factor))  # Clamp between 0.5x and 2x
+    
+    # Scale hit rate
+    new_hit = min(0.95, base_hit * scale_factor)
+    hit_increase = new_hit - base_hit
+    
+    # Redistribute: take from misses proportionally
+    total_misses = base_miss_inside + base_miss_outside + base_neighbor + base_other
+    if total_misses > 0 and hit_increase != 0:
+        reduction_factor = (total_misses - hit_increase) / total_misses if hit_increase > 0 else (total_misses + abs(hit_increase)) / total_misses
+        reduction_factor = max(0.0, reduction_factor)
+        new_miss_inside = base_miss_inside * reduction_factor
+        new_miss_outside = base_miss_outside * reduction_factor
+        new_neighbor = base_neighbor * reduction_factor
+        new_other = base_other * reduction_factor
+    else:
+        new_miss_inside = base_miss_inside
+        new_miss_outside = base_miss_outside
+        new_neighbor = base_neighbor
+        new_other = base_other
+    
+    # Normalise to ensure sum = 1.0
+    total = new_hit + new_miss_inside + new_miss_outside + new_neighbor + new_other
+    if total > 0:
+        new_hit /= total
+        new_miss_inside /= total
+        new_miss_outside /= total
+        new_neighbor /= total
+        new_other /= total
+    
+    return {
+        'hit_double': new_hit,
+        'miss_inside': new_miss_inside,
+        'miss_outside': new_miss_outside,
+        'neighbor_singledouble': new_neighbor,
+        'other': new_other,
+        'samples': base_outcomes['samples']
+    }
+
 # Bull specific aggregation
 def aggregate_bull_outcomes(counter: Counter, label: str):
     total = sum(counter.values())
@@ -411,22 +522,35 @@ def model_bull_outcomes(rep_avg: float, sample_total: int = 0):
     }
 
 def compute_all_double_outcomes():
+    # Calculate dataset average across all files
+    total_avg = 0.0
+    count_files = 0
+    for fname, avg, aimed_t20, hits_t20 in per_file_records:
+        if avg is not None:
+            total_avg += avg
+            count_files += 1
+    dataset_avg = total_avg / count_files if count_files > 0 else 70.0
+    
     results = {}
     for label, rep in bins:
         results[label] = {}
-        counters = aim_empirical_bins.get(label, {})
+        # Use pooled empirical data from all averages, then scale by bin average
         for n in range(1, 21):
-            c = counters.get(f'd{n}', None)
-            total = sum(counters.get(f'd{n}', Counter()).values()) if counters else 0
+            # Get all doubles for this number across all files/averages
+            pooled_counter = aim_empirical.get(f'd{n}', Counter())
+            total = sum(pooled_counter.values())
             if total >= MIN_EMPIRICAL_SAMPLES:
-                results[label][f'd{n}'] = aggregate_double_outcomes(counters.get(f'd{n}', Counter()), n, label)
+                base_outcomes = aggregate_double_outcomes(pooled_counter, n, label)
+                # Scale outcomes based on this bin's average vs dataset average
+                results[label][f'd{n}'] = scale_double_outcomes_by_avg(base_outcomes, rep, dataset_avg)
             else:
                 results[label][f'd{n}'] = model_double_outcomes(n, rep, total)
-        # Add bull as a double outcome
-        c_bull = counters.get('ibull', None)
-        total_bull = sum(counters.get('ibull', Counter()).values()) if counters else 0
+        # Add bull as a double outcome 
+        pooled_bull = aim_empirical.get('ibull', Counter())
+        total_bull = sum(pooled_bull.values())
         if total_bull >= MIN_EMPIRICAL_SAMPLES:
-            results[label]['ibull'] = aggregate_bull_outcomes(counters.get('ibull', Counter()), label)
+            base_bull = aggregate_bull_outcomes(pooled_bull, label)
+            results[label]['ibull'] = scale_double_outcomes_by_avg(base_bull, rep, dataset_avg)
         else:
             results[label]['ibull'] = model_bull_outcomes(rep, total_bull)
     return results
