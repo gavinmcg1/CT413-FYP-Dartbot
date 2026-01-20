@@ -1,11 +1,6 @@
 import React from 'react';
-import {
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-  ScrollView,
-} from 'react-native';
+import { ScrollView, View } from 'react-native';
+import { Card, Button, Text, useTheme } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 
 const gameModes = [
@@ -43,99 +38,49 @@ const gameModes = [
 
 export default function GameModesScreen() {
   const router = useRouter();
+  const theme = useTheme();
 
   const handleSelectMode = (modeId: string) => {
-    // TODO: Navigate to game screen with selected mode
-    console.log('Selected mode:', modeId);
+    router.push({ pathname: '/screens/GameSetupScreen', params: { modeId } });
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Select Game Mode</Text>
-        <Text style={styles.subtitle}>Choose how you want to play</Text>
+    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }}>
+      <View style={{ padding: 16, paddingTop: 20, marginBottom: 10 }}>
+        <Text variant="headlineLarge" style={{ fontWeight: 'bold', marginBottom: 8 }}>
+          Select Game Mode
+        </Text>
+        <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+          Choose how you want to play
+        </Text>
       </View>
 
-      <View style={styles.modesContainer}>
+      <View style={{ padding: 12 }}>
         {gameModes.map((mode) => (
-          <TouchableOpacity
+          <Card
             key={mode.id}
-            style={styles.modeCard}
+            style={{ marginBottom: 12 }}
             onPress={() => handleSelectMode(mode.id)}
           >
-            <Text style={styles.modeTitle}>{mode.title}</Text>
-            <Text style={styles.modeDescription}>{mode.description}</Text>
-          </TouchableOpacity>
+            <Card.Content>
+              <Text variant="titleLarge" style={{ fontWeight: 'bold', marginBottom: 6 }}>
+                {mode.title}
+              </Text>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                {mode.description}
+              </Text>
+            </Card.Content>
+          </Card>
         ))}
       </View>
 
-      <TouchableOpacity
-        style={styles.backButton}
+      <Button
+        mode="outlined"
         onPress={() => router.back()}
+        style={{ margin: 16, marginTop: 8 }}
       >
-        <Text style={styles.backButtonText}>Back to Home</Text>
-      </TouchableOpacity>
+        Back to Home
+      </Button>
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  header: {
-    backgroundColor: '#1a1a1a',
-    padding: 20,
-    paddingTop: 40,
-    marginBottom: 20,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#ccc',
-    marginTop: 5,
-  },
-  modesContainer: {
-    padding: 15,
-  },
-  modeCard: {
-    backgroundColor: '#fff',
-    padding: 20,
-    borderRadius: 10,
-    marginBottom: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  modeTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#1a1a1a',
-    marginBottom: 8,
-  },
-  modeDescription: {
-    fontSize: 14,
-    color: '#666',
-    lineHeight: 20,
-  },
-  backButton: {
-    backgroundColor: '#6c757d',
-    padding: 14,
-    borderRadius: 8,
-    margin: 15,
-    marginTop: 5,
-    alignItems: 'center',
-  },
-  backButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-});
