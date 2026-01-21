@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, Animated, Dimensions } from 'react-native';
+import { View, StyleSheet, Animated, Platform } from 'react-native';
 import { Text, Button, useTheme } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 export default function CoinFlipScreen() {
   const theme = useTheme();
@@ -11,51 +12,33 @@ export default function CoinFlipScreen() {
   const [isFlipping, setIsFlipping] = useState(false);
   const [result, setResult] = useState<'user' | 'dartbot' | null>(null);
   const rotateAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(1)).current;
 
   const flipCoin = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setIsFlipping(true);
     setResult(null);
 
-    // Reset animations
+    // Reset animation
     rotateAnim.setValue(0);
-    scaleAnim.setValue(1);
 
     // Randomly determine winner
     const winner = Math.random() < 0.5 ? 'user' : 'dartbot';
 
     // Create flip animation sequence
-    Animated.parallel([
-      Animated.sequence([
-        // Flip multiple times
-        Animated.timing(rotateAnim, {
-          toValue: 10, // 10 full rotations
-          duration: 2000,
-          useNativeDriver: true,
-        }),
-      ]),
-      Animated.sequence([
-        // Scale up during flip
-        Animated.timing(scaleAnim, {
-          toValue: 1.3,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-        // Scale back down
-        Animated.timing(scaleAnim, {
-          toValue: 1,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-      ]),
-    ]).start(() => {
+    Animated.timing(rotateAnim, {
+      toValue: 10, // 10 full rotations
+      duration: 2000,
+      useNativeDriver: true,
+    }).start(() => {
       // After animation completes, show result
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setIsFlipping(false);
       setResult(winner);
     });
   };
 
   const handleContinue = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     // Navigate to game screen
     console.log('Starting game with:', {
       ...params,
@@ -68,8 +51,9 @@ export default function CoinFlipScreen() {
   };
 
   const spin = rotateAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '180deg'],
+    inputRange: [0, 10],
+    outputRange: ['0deg', '3600deg'],
+    extrapolate: 'clamp',
   });
 
   return (
@@ -86,8 +70,7 @@ export default function CoinFlipScreen() {
               {
                 backgroundColor: theme.colors.primary,
                 transform: [
-                  { rotateY: spin },
-                  { scale: scaleAnim },
+                  { rotateZ: spin },
                 ],
               },
             ]}
@@ -152,7 +135,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginVertical: 40,
-    height: 200,
+    height: 240,
+    overflow: 'visible',
   },
   coin: {
     width: 160,
@@ -160,11 +144,17 @@ const styles = StyleSheet.create({
     borderRadius: 80,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
   },
   resultContainer: {
     marginTop: 20,

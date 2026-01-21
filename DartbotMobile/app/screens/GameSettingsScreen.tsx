@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { ScrollView, View } from 'react-native';
-import { Button, Card, RadioButton, Text, TextInput, useTheme } from 'react-native-paper';
+import { ScrollView, View, Platform } from 'react-native';
+import { Button, Card, SegmentedButtons, Text, TextInput, useTheme, IconButton } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 export default function GameSettingsScreen() {
   const theme = useTheme();
@@ -16,6 +17,7 @@ export default function GameSettingsScreen() {
   const [outRule, setOutRule] = useState<string>('double');
 
   const handleContinue = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     let finalScore = parseInt(startingScore) || 501;
     if (startingScore === 'custom') {
       finalScore = Math.max(101, Math.min(9999, parseInt(customScore) || 501));
@@ -38,26 +40,33 @@ export default function GameSettingsScreen() {
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }}>
-      <View style={{ padding: 16 }}>
-        <Card style={{ marginBottom: 16 }}>
+      <View style={{ padding: 16, gap: 16 }}>
+        <Card style={{
+          borderRadius: 18,
+          ...Platform.select({
+            ios: {
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.12,
+              shadowRadius: 12,
+            },
+            android: { elevation: 4 },
+          }),
+        }}>
           <Card.Content>
             <Text variant="titleMedium" style={{ fontWeight: 'bold', marginBottom: 12 }}>
               Starting Score
             </Text>
-            <RadioButton.Group onValueChange={setStartingScore} value={startingScore}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <RadioButton value="301" />
-                <Text>301</Text>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <RadioButton value="501" />
-                <Text>501</Text>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <RadioButton value="custom" />
-                <Text>Custom</Text>
-              </View>
-            </RadioButton.Group>
+            <SegmentedButtons
+              value={startingScore}
+              onValueChange={setStartingScore}
+              style={{ marginBottom: 8 }}
+              buttons={[
+                { value: '301', label: '301' },
+                { value: '501', label: '501' },
+                { value: 'custom', label: 'Custom' },
+              ]}
+            />
             {startingScore === 'custom' && (
               <TextInput
                 label="Custom Score (101-9999)"
@@ -71,79 +80,146 @@ export default function GameSettingsScreen() {
           </Card.Content>
         </Card>
 
-        <Card style={{ marginBottom: 16 }}>
+        <Card style={{
+          borderRadius: 18,
+          ...Platform.select({
+            ios: {
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.12,
+              shadowRadius: 12,
+            },
+            android: { elevation: 4 },
+          }),
+        }}>
           <Card.Content>
             <Text variant="titleMedium" style={{ fontWeight: 'bold', marginBottom: 12 }}>
               Match Format
             </Text>
-            <RadioButton.Group onValueChange={setMatchFormat} value={matchFormat}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <RadioButton value="bestOf" />
-                <Text>Best Of</Text>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                <RadioButton value="firstTo" />
-                <Text>First To</Text>
-              </View>
-            </RadioButton.Group>
-
-            <RadioButton.Group onValueChange={setMatchType} value={matchType}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <RadioButton value="legs" />
-                <Text>Legs</Text>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-                <RadioButton value="sets" />
-                <Text>Sets</Text>
-              </View>
-            </RadioButton.Group>
-            <TextInput
-              label={`Number of ${matchType === 'legs' ? 'Legs' : 'Sets'}`}
-              value={matchValue}
-              onChangeText={setMatchValue}
-              keyboardType="number-pad"
-              mode="outlined"
+            <SegmentedButtons
+              value={matchFormat}
+              onValueChange={setMatchFormat}
+              style={{ marginBottom: 12 }}
+              buttons={[
+                { value: 'bestOf', label: 'Best Of' },
+                { value: 'firstTo', label: 'First To' },
+              ]}
             />
+
+            <SegmentedButtons
+              value={matchType}
+              onValueChange={setMatchType}
+              style={{ marginBottom: 12 }}
+              buttons={[
+                { value: 'legs', label: 'Legs' },
+                { value: 'sets', label: 'Sets' },
+              ]}
+            />
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: theme.colors.surfaceVariant,
+              borderRadius: 12,
+              paddingHorizontal: 8,
+              paddingVertical: 6,
+            }}>
+              <IconButton
+                icon="chevron-down"
+                size={26}
+                onPress={() => {
+                  const next = Math.max(1, (parseInt(matchValue, 10) || 1) - 1);
+                  setMatchValue(String(next));
+                }}
+              />
+              <Text variant="headlineMedium" style={{ fontWeight: '700' }}>
+                {matchValue}
+              </Text>
+              <IconButton
+                icon="chevron-up"
+                size={26}
+                onPress={() => {
+                  const next = Math.min(99, (parseInt(matchValue, 10) || 1) + 1);
+                  setMatchValue(String(next));
+                }}
+              />
+            </View>
           </Card.Content>
         </Card>
 
-        <Card style={{ marginBottom: 16 }}>
+        <Card style={{
+          borderRadius: 18,
+          ...Platform.select({
+            ios: {
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.12,
+              shadowRadius: 12,
+            },
+            android: { elevation: 4 },
+          }),
+        }}>
           <Card.Content>
             <Text variant="titleMedium" style={{ fontWeight: 'bold', marginBottom: 12 }}>
               In Rule
             </Text>
-            <RadioButton.Group onValueChange={setInRule} value={inRule}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <RadioButton value="straight" />
-                <Text>Straight In</Text>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <RadioButton value="double" />
-                <Text>Double In</Text>
-              </View>
-            </RadioButton.Group>
+            <SegmentedButtons
+              value={inRule}
+              onValueChange={setInRule}
+              style={{ marginBottom: 4 }}
+              buttons={[
+                { value: 'straight', label: 'Straight In' },
+                { value: 'double', label: 'Double In' },
+              ]}
+            />
           </Card.Content>
         </Card>
 
-        <Card style={{ marginBottom: 16 }}>
+        <Card style={{
+          borderRadius: 18,
+          ...Platform.select({
+            ios: {
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.12,
+              shadowRadius: 12,
+            },
+            android: { elevation: 4 },
+          }),
+        }}>
           <Card.Content>
             <Text variant="titleMedium" style={{ fontWeight: 'bold', marginBottom: 12 }}>
               Out Rule
             </Text>
-            <RadioButton.Group onValueChange={setOutRule} value={outRule}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <RadioButton value="straight" />
-                <Text>Straight Out</Text>
-              </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <RadioButton value="double" />
-                <Text>Double Out</Text>
-              </View>
-            </RadioButton.Group>
+            <SegmentedButtons
+              value={outRule}
+              onValueChange={setOutRule}
+              style={{ marginBottom: 4 }}
+              buttons={[
+                { value: 'straight', label: 'Straight Out' },
+                { value: 'double', label: 'Double Out' },
+              ]}
+            />
           </Card.Content>
         </Card>
 
-        <Button mode="contained" onPress={handleContinue} style={{ marginBottom: 8 }}>
+        <Button
+          mode="contained"
+          onPress={handleContinue}
+          style={{
+            marginBottom: 8,
+            borderRadius: 14,
+            ...Platform.select({
+              ios: {
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.2,
+                shadowRadius: 8,
+              },
+            }),
+          }}
+          labelStyle={{ fontSize: 17, fontWeight: '600' }}
+        >
           Continue
         </Button>
 
