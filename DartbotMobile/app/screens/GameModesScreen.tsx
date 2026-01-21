@@ -1,7 +1,8 @@
 import React from 'react';
-import { ScrollView, View } from 'react-native';
+import { ScrollView, View, Platform } from 'react-native';
 import { Card, Button, Text, useTheme } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 const gameModes = [
   {
@@ -41,6 +42,7 @@ export default function GameModesScreen() {
   const theme = useTheme();
 
   const handleSelectMode = (modeId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push({ pathname: '/screens/GameSetupScreen', params: { modeId } });
   };
 
@@ -59,7 +61,19 @@ export default function GameModesScreen() {
         {gameModes.map((mode) => (
           <Card
             key={mode.id}
-            style={{ marginBottom: 12 }}
+            style={{
+              marginBottom: 12,
+              borderRadius: 16,
+              ...Platform.select({
+                ios: {
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 8,
+                },
+                android: { elevation: 3 },
+              }),
+            }}
             onPress={() => handleSelectMode(mode.id)}
           >
             <Card.Content>

@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { View } from 'react-native';
+import { View, Platform } from 'react-native';
 import { Button, Card, Text, useTheme } from 'react-native-paper';
 import Slider from '@react-native-community/slider';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 const modeTitles: Record<string, string> = {
   standardGame: 'Standard Game',
@@ -50,12 +51,25 @@ export default function GameSetupScreen() {
   }, [modeId]);
 
   const handleStart = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     router.push('/screens/GameSettingsScreen');
   };
 
   return (
     <View style={{ flex: 1, padding: 16, backgroundColor: theme.colors.background }}>
-      <Card style={{ marginBottom: 16 }}>
+      <Card style={{
+        marginBottom: 16,
+        borderRadius: 16,
+        ...Platform.select({
+          ios: {
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 8,
+          },
+          android: { elevation: 3 },
+        }),
+      }}>
         <Card.Content>
           <Text variant="headlineSmall" style={{ fontWeight: 'bold', marginBottom: 4 }}>
             {title}
@@ -66,7 +80,18 @@ export default function GameSetupScreen() {
         </Card.Content>
       </Card>
 
-      <Card>
+      <Card style={{
+        borderRadius: 16,
+        ...Platform.select({
+          ios: {
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.1,
+            shadowRadius: 8,
+          },
+          android: { elevation: 3 },
+        }),
+      }}>
         <Card.Content>
           <Text variant="titleMedium" style={{ fontWeight: '600', marginBottom: 8 }}>
             Dartbot Level: {level} ({averageRange} avg)
@@ -87,7 +112,19 @@ export default function GameSetupScreen() {
       <Button
         mode="contained"
         onPress={handleStart}
-        style={{ marginTop: 20 }}
+        style={{
+          marginTop: 20,
+          borderRadius: 14,
+          ...Platform.select({
+            ios: {
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.2,
+              shadowRadius: 8,
+            },
+          }),
+        }}
+        labelStyle={{ fontSize: 17, fontWeight: '600' }}
       >
         Next
       </Button>
