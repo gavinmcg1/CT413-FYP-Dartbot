@@ -70,22 +70,14 @@ export default function CoinFlipScreen() {
               {
                 backgroundColor: theme.colors.primary,
                 transform: [
-                  { perspective: 900 },
-                  { rotateY: spin },
+                  { rotateZ: spin },
                 ],
               },
             ]}
           >
-            <View style={styles.face}>
-              <Text variant="displayMedium" style={{ color: theme.colors.onPrimary, fontWeight: 'bold' }}>
-                {isFlipping ? '?' : result === 'user' ? 'YOU' : result === 'dartbot' ? 'BOT' : '?'}
-              </Text>
-            </View>
-            <View style={[styles.face, styles.backFace]}>
-              <Text variant="displayMedium" style={{ color: theme.colors.onPrimary, fontWeight: 'bold' }}>
-                {isFlipping ? '?' : result === 'user' ? 'YOU' : result === 'dartbot' ? 'BOT' : '?'}
-              </Text>
-            </View>
+            <Text variant="displayMedium" style={{ color: theme.colors.onPrimary, fontWeight: 'bold' }}>
+              {isFlipping ? '?' : result === 'user' ? 'YOU' : result === 'dartbot' ? 'BOT' : '?'}
+            </Text>
           </Animated.View>
         </View>
 
@@ -152,28 +144,17 @@ const styles = StyleSheet.create({
     borderRadius: 80,
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 8 },
         shadowOpacity: 0.3,
         shadowRadius: 12,
-        elevation: 8,
       },
       android: {
         elevation: 8,
       },
     }),
-  },
-  face: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backfaceVisibility: 'hidden',
-  },
-  backFace: {
-    transform: [{ rotateY: '180deg' }],
   },
   resultContainer: {
     marginTop: 20,
