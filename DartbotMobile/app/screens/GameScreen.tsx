@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, ScrollView, Modal } from 'react-native';
+import { View, StyleSheet, ScrollView, Modal, Platform } from 'react-native';
 import { Text, Button, useTheme, TextInput } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 export default function GameScreen() {
   const theme = useTheme();
@@ -43,6 +44,7 @@ export default function GameScreen() {
     if (winner || currentPlayer === 'dartbot') return;
     // Limit to 3 digits (max score is 180)
     if (inputScore.length < 3) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setInputScore(inputScore + num);
     }
   };
@@ -122,12 +124,14 @@ export default function GameScreen() {
   const handleSubmit = () => {
     if (winner || currentPlayer === 'dartbot') return;
     if (!inputScore) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const val = parseInt(inputScore, 10);
     applyThrow('user', val);
     setInputScore('');
   };
 
   const handleDoublePromptClose = (dartsAtDouble: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const attempts = parseInt(dartsAtDouble, 10);
     if (!Number.isNaN(attempts) && attempts > 0) {
       setDoubleAttempts((prev) => prev + attempts);
@@ -347,8 +351,8 @@ export default function GameScreen() {
       </ScrollView>
 
       {/* Double Prompt Modal */}
-      <Modal visible={showDoublePrompt} transparent={true} animationType="fade">
-        <View style={[styles.modalOverlay, { backgroundColor: `${theme.colors.background}99` }]}>
+      <Modal visible={showDoublePrompt} transparent={true} animationType="slide" presentationStyle="pageSheet">
+        <View style={[styles.modalOverlay, { backgroundColor: `${theme.colors.background}E6` }]}>
           <View style={[styles.modalContent, { backgroundColor: theme.colors.background }]}>
             <Text variant="headlineSmall" style={{ color: theme.colors.onBackground, marginBottom: 16 }}>
               How many darts were thrown at double?
@@ -370,8 +374,8 @@ export default function GameScreen() {
       </Modal>
 
       {/* Checkout Prompt Modal */}
-      <Modal visible={showCheckoutPrompt} transparent={true} animationType="fade">
-        <View style={[styles.modalOverlay, { backgroundColor: `${theme.colors.background}99` }]}>
+      <Modal visible={showCheckoutPrompt} transparent={true} animationType="slide" presentationStyle="pageSheet">
+        <View style={[styles.modalOverlay, { backgroundColor: `${theme.colors.background}E6` }]}>
           <View style={[styles.modalContent, { backgroundColor: theme.colors.background }]}>
             <Text variant="headlineSmall" style={{ color: theme.colors.onBackground, marginBottom: 16 }}>
               How many darts to checkout?
@@ -435,17 +439,39 @@ const styles = StyleSheet.create({
     flex: 1,
     marginHorizontal: 6,
     padding: 12,
-    borderRadius: 12,
+    borderRadius: 16,
     borderWidth: 2,
     alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
   },
   display: {
     padding: 20,
-    borderRadius: 12,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
     minHeight: 80,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 6,
+      },
+    }),
   },
   keypad: {
     marginVertical: 12,
@@ -459,6 +485,7 @@ const styles = StyleSheet.create({
     flex: 1,
     marginHorizontal: 6,
     paddingVertical: 8,
+    borderRadius: 12,
   },
   buttonLabel: {
     fontSize: 24,
@@ -475,9 +502,20 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     marginHorizontal: 20,
-    padding: 20,
-    borderRadius: 12,
+    padding: 24,
+    borderRadius: 20,
     minWidth: '80%',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.3,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 24,
+      },
+    }),
   },
   buttonGrid: {
     flexDirection: 'row',
