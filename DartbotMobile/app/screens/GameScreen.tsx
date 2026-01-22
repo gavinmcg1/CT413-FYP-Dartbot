@@ -18,6 +18,7 @@ export default function GameScreen() {
 
   const outRule = (params.outRule as string) || 'double';
   const level = parseInt(params.level as string, 10) || 10; // 1-18 from setup screen
+<<<<<<< Updated upstream
 
   const [userScore, setUserScore] = useState<number>(startingScore);
   const [botScore, setBotScore] = useState<number>(startingScore);
@@ -26,6 +27,15 @@ export default function GameScreen() {
   const [status, setStatus] = useState<string>('Enter your score');
   const [winner, setWinner] = useState<Player | null>(null);
   const [botThinking, setBotThinking] = useState<boolean>(false);
+=======
+  const [userScore, setUserScore] = useState<number>(startingScore);
+  const [botScore, setBotScore] = useState<number>(startingScore);
+  const [currentPlayer, setCurrentPlayer] = useState<Player>((params.firstPlayer as Player) || 'user');
+  const [inputScore, setInputScore] = useState<string>('0');
+  const [status, setStatus] = useState<string>('Enter your score');
+  const [winner, setWinner] = useState<Player | null>(null);
+  const [,setBotThinking] = useState<boolean>(false);
+>>>>>>> Stashed changes
 
   // Stats tracking
   const [userThrows, setUserThrows] = useState<number[]>([]);
@@ -34,6 +44,24 @@ export default function GameScreen() {
   const [userCheckoutDoubles, setUserCheckoutDoubles] = useState<number | null>(null);
   const [doubleAttempts, setDoubleAttempts] = useState<number>(0);
 
+<<<<<<< Updated upstream
+=======
+  // History for undo
+  type GameState = {
+    userScore: number;
+    botScore: number;
+    currentPlayer: Player;
+    status: string;
+    winner: Player | null;
+    userThrows: number[];
+    userBestLeg: number;
+    userCheckoutDarts: number | null;
+    userCheckoutDoubles: number | null;
+    doubleAttempts: number;
+  };
+  const [history, setHistory] = useState<GameState[]>([]);
+
+>>>>>>> Stashed changes
   // Modals
   const [showDoublePrompt, setShowDoublePrompt] = useState(false);
   const [showCheckoutPrompt, setShowCheckoutPrompt] = useState(false);
@@ -45,18 +73,31 @@ export default function GameScreen() {
     // Limit to 3 digits (max score is 180)
     if (inputScore.length < 3) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+<<<<<<< Updated upstream
       setInputScore(inputScore + num);
+=======
+      setInputScore(inputScore === '0' ? num : inputScore + num);
+>>>>>>> Stashed changes
     }
   };
 
   const handleClear = () => {
     if (winner || currentPlayer === 'dartbot') return;
+<<<<<<< Updated upstream
     setInputScore('');
+=======
+    setInputScore('0');
+>>>>>>> Stashed changes
   };
 
   const handleBackspace = () => {
     if (winner || currentPlayer === 'dartbot') return;
+<<<<<<< Updated upstream
     setInputScore(inputScore.slice(0, -1));
+=======
+    const next = inputScore.slice(0, -1);
+    setInputScore(next.length === 0 ? '0' : next);
+>>>>>>> Stashed changes
   };
 
   const isValidThrow = (val: number) => val >= 0 && val <= 180 && ![179, 178, 176, 175, 173, 172, 169, 166, 163].includes(val);
@@ -66,6 +107,38 @@ export default function GameScreen() {
     const scoreBefore = player === 'user' ? userScore : botScore;
     const noCheckout = [1, 159, 162, 163, 165, 166, 168, 169];
 
+<<<<<<< Updated upstream
+=======
+    // Save state for undo
+    setHistory((prev) => [
+      ...prev,
+      {
+        userScore,
+        botScore,
+        currentPlayer,
+        status,
+        winner,
+        userThrows: [...userThrows],
+        userBestLeg,
+        userCheckoutDarts,
+        userCheckoutDoubles,
+        doubleAttempts,
+      },
+    ]);
+
+    const logUserTurn = (score: number) => {
+      if (player === 'user') {
+        setUserThrows((prev) => [...prev, score]);
+      }
+    };
+
+    const promptDoubleOnBustIfNeeded = () => {
+      if (player === 'user' && scoreBefore > 0 && scoreBefore <= 50) {
+        setShowDoublePrompt(true);
+      }
+    };
+
+>>>>>>> Stashed changes
     if (!isValidThrow(throwScore)) {
       setStatus('Invalid score (0-180).');
       return;
@@ -73,16 +146,49 @@ export default function GameScreen() {
 
     // Bust if overshoot
     if (throwScore > scoreBefore) {
+<<<<<<< Updated upstream
       setStatus(`${player === 'user' ? 'You' : 'Dartbot'} busts. No score.`);
+=======
+      logUserTurn(0);
+      setStatus('Bust.');
+      promptDoubleOnBustIfNeeded();
+>>>>>>> Stashed changes
       setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
       return;
     }
 
+<<<<<<< Updated upstream
     // Track throw
     if (player === 'user') {
       setUserThrows([...userThrows, throwScore]);
     }
 
+=======
+    // Bust scenarios specific to double-out rules
+    if (needsDouble) {
+      const remainingAfter = scoreBefore - throwScore;
+      // With 2 remaining you must hit double 1 exactly; any other score busts
+      if (scoreBefore === 2 && throwScore !== 2 && throwScore !== 0) {
+        logUserTurn(0);
+        setStatus('Bust.');
+        promptDoubleOnBustIfNeeded();
+        setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
+        return;
+      }
+      // Cannot leave a score of 1 when finishing on a double
+      if (remainingAfter === 1) {
+        logUserTurn(0);
+        setStatus('Bust.');
+        promptDoubleOnBustIfNeeded();
+        setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
+        return;
+      }
+    }
+
+    // Track throw
+    logUserTurn(throwScore);
+
+>>>>>>> Stashed changes
     // Finishing logic
     if (throwScore === scoreBefore) {
       if (noCheckout.includes(scoreBefore)) {
@@ -91,7 +197,13 @@ export default function GameScreen() {
         return;
       }
       if (needsDouble && throwScore % 2 !== 0) {
+<<<<<<< Updated upstream
         setStatus(`${player === 'user' ? 'You' : 'Dartbot'} busts (need double).`);
+=======
+        logUserTurn(0);
+        setStatus('Bust.');
+        promptDoubleOnBustIfNeeded();
+>>>>>>> Stashed changes
         setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
         return;
       }
@@ -127,9 +239,48 @@ export default function GameScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const val = parseInt(inputScore, 10);
     applyThrow('user', val);
+<<<<<<< Updated upstream
     setInputScore('');
   };
 
+=======
+    setInputScore('0');
+  };
+
+  const handleUndo = () => {
+    setShowDoublePrompt(false);
+    setShowCheckoutPrompt(false);
+    setCheckoutDartsInput('');
+    setCheckoutDoublesInput('');
+    setInputScore('0');
+
+    setHistory((prev) => {
+      if (prev.length === 0) return prev;
+      
+      // If it's currently user's turn, undo both bot and user turns (2 states)
+      // If it's bot's turn, only undo the user's turn (1 state)
+      let statesToUndo = 1;
+      if (currentPlayer === 'user' && prev.length >= 2) {
+        statesToUndo = 2; // Undo both bot's and user's last turns
+      }
+      
+      const targetState = prev[prev.length - statesToUndo];
+      setUserScore(targetState.userScore);
+      setBotScore(targetState.botScore);
+      setCurrentPlayer(targetState.currentPlayer);
+      setStatus(targetState.status);
+      setWinner(targetState.winner);
+      setUserThrows(targetState.userThrows);
+      setUserBestLeg(targetState.userBestLeg);
+      setUserCheckoutDarts(targetState.userCheckoutDarts);
+      setUserCheckoutDoubles(targetState.userCheckoutDoubles);
+      setDoubleAttempts(targetState.doubleAttempts);
+      
+      return prev.slice(0, -statesToUndo);
+    });
+  };
+
+>>>>>>> Stashed changes
   const handleDoublePromptClose = (dartsAtDouble: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const attempts = parseInt(dartsAtDouble, 10);
@@ -335,10 +486,25 @@ export default function GameScreen() {
           mode="contained"
           onPress={handleSubmit}
           style={styles.submitButton}
+<<<<<<< Updated upstream
           disabled={!inputScore || currentPlayer === 'dartbot' || !!winner}
         >
           Submit Score
         </Button>
+=======
+          disabled={currentPlayer === 'dartbot' || !!winner}
+        >
+          Submit Score
+        </Button>
+        <Button
+          mode="outlined"
+          onPress={handleUndo}
+          style={{ marginBottom: 8 }}
+          disabled={history.length === 0}
+        >
+          Undo Last Turn
+        </Button>
+>>>>>>> Stashed changes
         {winner && (
           <Button
             mode="outlined"
