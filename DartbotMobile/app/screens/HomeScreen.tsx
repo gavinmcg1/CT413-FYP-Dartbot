@@ -1,7 +1,8 @@
 import React from 'react';
-import { ScrollView, View } from 'react-native';
+import { ScrollView, View, Platform } from 'react-native';
 import { Button, Text, useTheme } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
 
 //const API_BASE_URL = 'http://192.168.1.100:5000/api';
 
@@ -10,6 +11,7 @@ export default function HomeScreen() {
   const theme = useTheme();
 
   const handleStartGame = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     router.push('/screens/GameModesScreen');
   };
 
@@ -28,7 +30,19 @@ export default function HomeScreen() {
         <Button
           mode="contained"
           onPress={handleStartGame}
-          style={{ paddingVertical: 8 }}
+          style={{ 
+            paddingVertical: 8, 
+            borderRadius: 14,
+            ...Platform.select({
+              ios: {
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.2,
+                shadowRadius: 8,
+              },
+            }),
+          }}
+          labelStyle={{ fontSize: 18, fontWeight: '600' }}
         >
           Start Game
         </Button>

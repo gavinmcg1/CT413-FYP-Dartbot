@@ -17,15 +17,22 @@ export default function RootLayout() {
   return (
     <PaperProvider theme={paperTheme}>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
+        <Stack
+          screenOptions={{
+            headerLargeTitle: true,
+            headerTransparent: false,
+            headerBlurEffect: 'systemMaterial',
+            headerShadowVisible: true,
+          }}
+        >
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-          <Stack.Screen name="screens/HomeScreen" options={{ headerShown: false }} />
-          <Stack.Screen name="screens/GameModesScreen" options={{ title: 'Game Modes' }} />
-          <Stack.Screen name="screens/GameSetupScreen" options={{ title: 'Game Setup' }} />
-          <Stack.Screen name="screens/GameSettingsScreen" options={{ title: 'Game Settings' }} />
-          <Stack.Screen name="screens/CoinFlipScreen" options={{ title: 'Coin Flip' }} />
-          <Stack.Screen name="screens/GameScreen" options={{ title: 'Game' }} />
+          <Stack.Screen name="screens/HomeScreen" options={{ headerShown: false, title: 'Home' }} />
+          <Stack.Screen name="screens/GameModesScreen" options={{ title: 'Game Modes', headerLargeTitle: true }} />
+          <Stack.Screen name="screens/GameSetupScreen" options={{ title: 'Game Setup', headerLargeTitle: true }} />
+          <Stack.Screen name="screens/GameSettingsScreen" options={{ title: 'Game Settings', headerLargeTitle: true }} />
+          <Stack.Screen name="screens/CoinFlipScreen" options={{ title: 'Coin Flip', headerLargeTitle: true }} />
+          <Stack.Screen name="screens/GameScreen" options={{ title: 'Game', headerLargeTitle: false }} />
         </Stack>
         <StatusBar style="auto" />
       </ThemeProvider>
