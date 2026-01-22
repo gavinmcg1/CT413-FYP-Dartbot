@@ -3,7 +3,7 @@ import { ScrollView, View } from 'react-native';
 import { Button, Text, useTheme } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 
-const API_BASE_URL = 'http://192.168.1.100:5000/api';
+//const API_BASE_URL = 'http://192.168.1.100:5000/api';
 
 export default function HomeScreen() {
   const router = useRouter();
