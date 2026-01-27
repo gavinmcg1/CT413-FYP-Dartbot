@@ -20,7 +20,8 @@ export default function GameScreen() {
   const level = parseInt(params.level as string, 10) || 10; // 1-18 from setup screen
   const [userScore, setUserScore] = useState<number>(startingScore);
   const [botScore, setBotScore] = useState<number>(startingScore);
-  const [currentPlayer, setCurrentPlayer] = useState<Player>((params.firstPlayer as Player) || 'user');
+  const initialFirstPlayer = (params.firstPlayer as Player) || 'user';
+  const [currentPlayer, setCurrentPlayer] = useState<Player>(initialFirstPlayer);
   const [inputScore, setInputScore] = useState<string>('0');
   const [status, setStatus] = useState<string>('Enter your score');
   const [winner, setWinner] = useState<Player | null>(null);
@@ -48,9 +49,16 @@ export default function GameScreen() {
   };
   const [history, setHistory] = useState<GameState[]>([]);
 
+  // State to store checkout score for modal options
+  const [checkoutScore, setCheckoutScore] = useState<number>(0);
+  // State to store pending throw while double prompt is open
+  const [pendingThrow, setPendingThrow] = useState<number | null>(null);
+  // State to track score before double prompt for conditional options
+  const [scoreBeforeDoublePrompt, setScoreBeforeDoublePrompt] = useState<number>(0);
   // Modals
   const [showDoublePrompt, setShowDoublePrompt] = useState(false);
   const [showCheckoutPrompt, setShowCheckoutPrompt] = useState(false);
+  const [doublePromptInput, setDoublePromptInput] = useState<string>('');
   const [checkoutDartsInput, setCheckoutDartsInput] = useState<string>('');
   const [checkoutDoublesInput, setCheckoutDoublesInput] = useState<string>('');
 
@@ -79,6 +87,7 @@ export default function GameScreen() {
   const applyThrow = (player: Player, throwScore: number) => {
     const needsDouble = outRule === 'double';
     const scoreBefore = player === 'user' ? userScore : botScore;
+    // Complete list of mathematically impossible checkouts (cannot finish on double from these scores)
     const noCheckout = [1, 159, 162, 163, 165, 166, 168, 169];
 
     // Save state for undo
@@ -104,23 +113,22 @@ export default function GameScreen() {
       }
     };
 
-    const promptDoubleOnBustIfNeeded = () => {
-      if (player === 'user' && scoreBefore > 0 && scoreBefore <= 50) {
-        setShowDoublePrompt(true);
-      }
-    };
-
     if (!isValidThrow(throwScore)) {
       setStatus('Invalid score (0-180).');
       return;
     }
 
+    const isCheckoutEligible = (score: number) => score >= 2 && score <= 170 && !noCheckout.includes(score);
+
     // Bust if overshoot
     if (throwScore > scoreBefore) {
       logUserTurn(0);
       setStatus('Bust.');
-      promptDoubleOnBustIfNeeded();
-      setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
+      if (player === 'user' && scoreBefore > 0 && scoreBefore <= 50 && isCheckoutEligible(scoreBefore)) {
+        setShowDoublePrompt(true);
+      } else {
+        setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
+      }
       return;
     }
 
@@ -131,16 +139,22 @@ export default function GameScreen() {
       if (scoreBefore === 2 && throwScore !== 2 && throwScore !== 0) {
         logUserTurn(0);
         setStatus('Bust.');
-        promptDoubleOnBustIfNeeded();
-        setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
+        if (player === 'user' && scoreBefore > 0 && scoreBefore <= 50 && isCheckoutEligible(scoreBefore)) {
+          setShowDoublePrompt(true);
+        } else {
+          setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
+        }
         return;
       }
       // Cannot leave a score of 1 when finishing on a double
       if (remainingAfter === 1) {
         logUserTurn(0);
         setStatus('Bust.');
-        promptDoubleOnBustIfNeeded();
-        setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
+        if (player === 'user' && scoreBefore > 0 && scoreBefore <= 50 && isCheckoutEligible(scoreBefore)) {
+          setShowDoublePrompt(true);
+        } else {
+          setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
+        }
         return;
       }
     }
@@ -155,17 +169,29 @@ export default function GameScreen() {
         setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
         return;
       }
-      if (needsDouble && throwScore % 2 !== 0) {
-        logUserTurn(0);
-        setStatus('Bust.');
-        promptDoubleOnBustIfNeeded();
-        setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
-        return;
-      }
       if (player === 'user') {
-        setUserScore(0);
-        // Check out achieved - show checkout prompt
-        setShowCheckoutPrompt(true);
+        // Auto-finish for checkouts 99 and 101+ except specific scores that should prompt
+        const promptCheckouts = [101, 104, 107, 110];
+        if (scoreBefore === 99 || (scoreBefore >= 101 && !promptCheckouts.includes(scoreBefore))) {
+          setUserScore(0);
+          setUserCheckoutDarts(3);
+          setUserCheckoutDoubles(1);
+          setDoubleAttempts((prev) => prev + 1);
+          // Calculate best leg based on current throws + checkout darts
+          setUserThrows((currentThrows) => {
+            const totalDartsThisLeg = Math.max(0, currentThrows.length - 1) * 3 + 3;
+            setUserBestLeg((prevBestLeg) => 
+              prevBestLeg === 0 || totalDartsThisLeg < prevBestLeg ? totalDartsThisLeg : prevBestLeg
+            );
+            return currentThrows;
+          });
+          setWinner('user');
+          setStatus('You win!');
+        } else {
+          // Check out achieved - show checkout prompt (don't set score yet)
+          setCheckoutScore(scoreBefore);
+          setShowCheckoutPrompt(true);
+        }
       } else {
         setBotScore(0);
         setWinner(player);
@@ -175,16 +201,21 @@ export default function GameScreen() {
       // Normal subtraction
       const newScore = scoreBefore - throwScore;
       if (player === 'user') {
-        setUserScore(newScore);
-        // Prompt whenever at 50 or below (and above 0)
-        if (newScore > 0 && newScore <= 50) {
+        // Prompt whenever at 50 or below (and above 0) - defer score update until confirmed
+        if (newScore > 0 && newScore <= 50 && isCheckoutEligible(scoreBefore)) {
+          setPendingThrow(throwScore);
+          setScoreBeforeDoublePrompt(scoreBefore);
           setShowDoublePrompt(true);
+          return; // Don't transition to dartbot yet
+        } else {
+          setUserScore(newScore);
+          setStatus(`You scored ${throwScore}. Next throw: Dartbot.`);
         }
       } else {
         setBotScore(newScore);
+        setStatus(`Dartbot scored ${throwScore}. Next throw: You.`);
       }
       setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
-      setStatus(`${player === 'user' ? 'You scored' : 'Dartbot scored'} ${throwScore}. Next throw: ${player === 'user' ? 'Dartbot' : 'You'}.`);
     }
   };
 
@@ -203,15 +234,17 @@ export default function GameScreen() {
     setCheckoutDartsInput('');
     setCheckoutDoublesInput('');
     setInputScore('0');
+    setPendingThrow(null);
 
     setHistory((prev) => {
       if (prev.length === 0) return prev;
       
-      // If it's currently user's turn, undo both bot and user turns (2 states)
-      // If it's bot's turn, only undo the user's turn (1 state)
+      // Default: undo the most recent state (1)
+      // Special case: if it's user's turn BECAUSE bot just threw, undo both (2)
       let statesToUndo = 1;
-      if (currentPlayer === 'user' && prev.length >= 2) {
-        statesToUndo = 2; // Undo both bot's and user's last turns
+      const lastSnapshot = prev[prev.length - 1];
+      if (currentPlayer === 'user' && lastSnapshot && lastSnapshot.currentPlayer === 'dartbot' && prev.length >= 2) {
+        statesToUndo = 2; // Undo bot's and user's last turns
       }
       
       const targetState = prev[prev.length - statesToUndo];
@@ -236,6 +269,18 @@ export default function GameScreen() {
     if (!Number.isNaN(attempts) && attempts > 0) {
       setDoubleAttempts((prev) => prev + attempts);
     }
+    
+    // Apply the deferred throw now (if any)
+    if (pendingThrow !== null) {
+      const newScore = userScore - pendingThrow;
+      setUserScore(newScore);
+    }
+    
+    // Always advance to dartbot after double prompt is confirmed
+    setCurrentPlayer('dartbot');
+    
+    setPendingThrow(null);
+    setDoublePromptInput('');
     setShowDoublePrompt(false);
   };
 
@@ -244,6 +289,7 @@ export default function GameScreen() {
       const darts = parseInt(checkoutDartsInput, 10);
       const doubles = parseInt(checkoutDoublesInput, 10);
       
+      setUserScore(0);
       setUserCheckoutDarts(darts);
       setUserCheckoutDoubles(doubles);
       if (!Number.isNaN(doubles) && doubles > 0) {
@@ -263,6 +309,21 @@ export default function GameScreen() {
     setCheckoutDartsInput('');
     setCheckoutDoublesInput('');
     setShowCheckoutPrompt(false);
+  };
+
+  // Determine checkout button options based on score
+  const getCheckoutOptions = (score: number) => {
+    const isOddUnder40 = score % 2 !== 0 && score < 40;
+    const isEvenBetween2And40 = score % 2 === 0 && score >= 2 && score <= 40;
+    const specialPromptScores = [100, 101, 104, 107, 110];
+    const isSpecialPrompt = specialPromptScores.includes(score);
+
+    return {
+      // For 100,101,104,107,110 and odd < 40: allow 2 or 3 darts to checkout
+      dartsOptions: (isOddUnder40 || isSpecialPrompt) ? ['2', '3'] : ['1', '2', '3'],
+      // For even 2-40, odd < 40, and special prompts: allow 1 or 2 darts at double
+      doublesOptions: (isOddUnder40 || isEvenBetween2And40 || isSpecialPrompt) ? ['1', '2'] : ['0', '1', '2', '3'],
+    };
   };
 
   // Calculate statistics
@@ -439,14 +500,26 @@ export default function GameScreen() {
         >
           Submit Score
         </Button>
-        <Button
-          mode="outlined"
-          onPress={handleUndo}
-          style={{ marginBottom: 8 }}
-          disabled={history.length === 0}
-        >
-          Undo Last Turn
-        </Button>
+        {initialFirstPlayer === 'user' && (
+          <Button
+            mode="outlined"
+            onPress={handleUndo}
+            style={{ marginBottom: 8 }}
+            disabled={history.length === 0}
+          >
+            Undo Last Turn
+          </Button>
+        )}
+        {initialFirstPlayer === 'dartbot' && userThrows.length > 0 && (
+          <Button
+            mode="outlined"
+            onPress={handleUndo}
+            style={{ marginBottom: 8 }}
+            disabled={history.length === 0}
+          >
+            Undo Last Turn
+          </Button>
+        )}
         {winner && (
           <Button
             mode="outlined"
@@ -466,17 +539,54 @@ export default function GameScreen() {
               How many darts were thrown at double?
             </Text>
             <View style={styles.buttonGrid}>
-              {['0', '1', '2', '3'].map((num) => (
-                <Button
-                  key={num}
-                  mode="contained"
-                  onPress={() => handleDoublePromptClose(num)}
-                  style={{ flex: 1, marginHorizontal: 4 }}
-                >
-                  {num}
-                </Button>
-              ))}
+              {(() => {
+                const score = scoreBeforeDoublePrompt;
+                let options: string[];
+                
+                // Checkout attempts from 99 or 101-170 (excluding special scores): [0, 1]
+                const specialCheckoutScores = [100, 101, 104, 107, 110];
+                const isCheckoutAttempt = score === 99 || (score >= 102 && score <= 170 && !specialCheckoutScores.includes(score));
+                
+                // Even 2-40 or 50: [0, 1, 2, 3]
+                const isEven2To40 = score >= 2 && score <= 40 && score % 2 === 0;
+                const is50 = score === 50;
+                
+                if (isCheckoutAttempt) {
+                  options = ['0', '1'];
+                } else if (isEven2To40 || is50) {
+                  options = ['0', '1', '2', '3'];
+                } else {
+                  // Everything else (under 99, odd 2-40, 100, 101, 104, 107, 110): [0, 1, 2]
+                  options = ['0', '1', '2'];
+                }
+                
+                return options.map((num) => (
+                  <Button
+                    key={num}
+                    mode="contained"
+                    onPress={() => handleDoublePromptClose(num)}
+                    style={{ flex: 1, marginHorizontal: 4 }}
+                  >
+                    {num}
+                  </Button>
+                ));
+              })()}
             </View>
+            <Button
+              mode="outlined"
+              onPress={() => {
+                // Simply close the modal - score was never changed since we deferred it
+                setPendingThrow(null);
+                setShowDoublePrompt(false);
+                // Remove the history entry that was created when applyThrow was called
+                setHistory((prev) => prev.slice(0, -1));
+                // Remove the logged throw for this attempt
+                setUserThrows((prev) => prev.slice(0, -1));
+              }}
+              style={{ marginTop: 16, width: '100%' }}
+            >
+              Back
+            </Button>
           </View>
         </View>
       </Modal>
@@ -489,7 +599,7 @@ export default function GameScreen() {
               How many darts to checkout?
             </Text>
             <View style={styles.buttonGrid}>
-              {['1', '2', '3'].map((num) => (
+              {getCheckoutOptions(checkoutScore).dartsOptions.map((num) => (
                 <Button
                   key={num}
                   mode={checkoutDartsInput === num ? "contained" : "outlined"}
@@ -504,7 +614,7 @@ export default function GameScreen() {
               Darts at double?
             </Text>
             <View style={styles.buttonGrid}>
-              {['0', '1', '2', '3'].map((num) => (
+              {getCheckoutOptions(checkoutScore).doublesOptions.map((num) => (
                 <Button
                   key={num}
                   mode={checkoutDoublesInput === num ? "contained" : "outlined"}
@@ -522,6 +632,19 @@ export default function GameScreen() {
               style={{ marginTop: 16 }}
             >
               Finish Game
+            </Button>
+            <Button
+              mode="outlined"
+              onPress={() => {
+                setShowCheckoutPrompt(false);
+                // Remove the history entry that was created when applyThrow was called
+                setHistory((prev) => prev.slice(0, -1));
+                // Remove the logged throw for this attempt
+                setUserThrows((prev) => prev.slice(0, -1));
+              }}
+              style={{ marginTop: 12, width: '100%' }}
+            >
+              Back
             </Button>
           </View>
         </View>
