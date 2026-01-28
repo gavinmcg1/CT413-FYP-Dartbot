@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, StyleSheet, ScrollView, Modal, Platform } from 'react-native';
 import { Text, Button, useTheme, TextInput } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 
 export default function GameScreen() {
@@ -18,6 +19,10 @@ export default function GameScreen() {
 
   const outRule = (params.outRule as string) || 'double';
   const level = parseInt(params.level as string, 10) || 10; // 1-18 from setup screen
+  const formatType = (params.formatType as string) || 'First To'; // "Best Of" or "First To"
+  const legOrSet = (params.legOrSet as string) || 'Legs'; // "Legs" or "Sets"
+  const formatNumber = parseInt(params.formatNumber as string, 10) || 1; // e.g., 3, 5, 7
+  const gameFormat = `${formatType} ${formatNumber} ${legOrSet}`;
   const [userScore, setUserScore] = useState<number>(startingScore);
   const [botScore, setBotScore] = useState<number>(startingScore);
   const initialFirstPlayer = (params.firstPlayer as Player) || 'user';
@@ -25,7 +30,32 @@ export default function GameScreen() {
   const [inputScore, setInputScore] = useState<string>('0');
   const [status, setStatus] = useState<string>('Enter your score');
   const [winner, setWinner] = useState<Player | null>(null);
+  const [matchWinner, setMatchWinner] = useState<Player | null>(null);
   const [,setBotThinking] = useState<boolean>(false);
+
+  // Leg/Set tracking
+  const requiredToWin = useMemo(() => {
+    if (legOrSet === 'Sets') {
+      // For sets: "Best Of X Sets" = first to X sets, "First To X Sets" = first to X sets
+      return formatNumber;
+    }
+    if (formatType === 'Best Of') {
+      // Best Of 3 Legs = win 2, Best Of 5 Legs = win 3, etc.
+      return Math.ceil(formatNumber / 2);
+    } else {
+      // First To N = win N
+      return formatNumber;
+    }
+  }, [formatType, formatNumber, legOrSet]);
+
+  const [userLegsWon, setUserLegsWon] = useState<number>(0);
+  const [botLegsWon, setBotLegsWon] = useState<number>(0);
+  const [currentLegNumber, setCurrentLegNumber] = useState<number>(1);
+  
+  // Sets tracking
+  const [userSetsWon, setUserSetsWon] = useState<number>(0);
+  const [botSetsWon, setBotSetsWon] = useState<number>(0);
+  const legsToWinSet = 3; // Always 3 legs to win a set
 
   // Stats tracking
   const [userThrows, setUserThrows] = useState<number[]>([]);
@@ -33,6 +63,11 @@ export default function GameScreen() {
   const [userCheckoutDarts, setUserCheckoutDarts] = useState<number | null>(null);
   const [userCheckoutDoubles, setUserCheckoutDoubles] = useState<number | null>(null);
   const [doubleAttempts, setDoubleAttempts] = useState<number>(0);
+  const [currentLegStartIndex, setCurrentLegStartIndex] = useState<number>(0);
+  
+  // Cumulative stats across all legs
+  const [cumulativeDoubleAttempts, setCumulativeDoubleAttempts] = useState<number>(0);
+  const [cumulativeCheckoutSuccess, setCumulativeCheckoutSuccess] = useState<number>(0);
 
   // History for undo
   type GameState = {
@@ -46,6 +81,13 @@ export default function GameScreen() {
     userCheckoutDarts: number | null;
     userCheckoutDoubles: number | null;
     doubleAttempts: number;
+    userLegsWon: number;
+    botLegsWon: number;
+    userSetsWon: number;
+    botSetsWon: number;
+    cumulativeDoubleAttempts: number;
+    cumulativeCheckoutSuccess: number;
+    currentLegStartIndex: number;
   };
   const [history, setHistory] = useState<GameState[]>([]);
 
@@ -58,9 +100,20 @@ export default function GameScreen() {
   // Modals
   const [showDoublePrompt, setShowDoublePrompt] = useState(false);
   const [showCheckoutPrompt, setShowCheckoutPrompt] = useState(false);
+  const [showStatsModal, setShowStatsModal] = useState(false);
+  const [showQuitConfirm, setShowQuitConfirm] = useState(false);
+  const [statsPage, setStatsPage] = useState<'overview' | 'scores'>('overview');
   const [doublePromptInput, setDoublePromptInput] = useState<string>('');
   const [checkoutDartsInput, setCheckoutDartsInput] = useState<string>('');
   const [checkoutDoublesInput, setCheckoutDoublesInput] = useState<string>('');
+
+  // Per-dart scoring mode
+  type ScoringMode = 'keypad' | 'perDart';
+  const [scoringMode, setScoringMode] = useState<ScoringMode>('keypad');
+  type Dart = { value: number; multiplier: 1 | 2 | 3; label: string };
+  const [currentDarts, setCurrentDarts] = useState<Dart[]>([]);
+  type Multiplier = 1 | 2 | 3;
+  const [selectedMultiplier, setSelectedMultiplier] = useState<Multiplier>(1);
 
   const handleNumberPress = (num: string) => {
     if (winner || currentPlayer === 'dartbot') return;
@@ -82,7 +135,103 @@ export default function GameScreen() {
     setInputScore(next.length === 0 ? '0' : next);
   };
 
+  const handleDartSelect = (value: number, multiplier?: 1 | 2 | 3, label?: string) => {
+    if (winner || currentPlayer === 'dartbot' || currentDarts.length >= 3) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const finalMultiplier = multiplier ?? selectedMultiplier;
+    const prefix = finalMultiplier === 1 ? 'S' : finalMultiplier === 2 ? 'D' : 'T';
+    const finalLabel = label || `${prefix}${value}`;
+    setCurrentDarts([...currentDarts, { value, multiplier: finalMultiplier, label: finalLabel }]);
+  };
+
+  const handleDartRemove = () => {
+    if (winner || currentPlayer === 'dartbot' || currentDarts.length === 0) return;
+    setCurrentDarts(currentDarts.slice(0, -1));
+  };
+
+  const handlePerDartConfirm = () => {
+    if (currentDarts.length === 0) return;
+    const totalScore = currentDarts.reduce((sum, dart) => sum + (dart.value * dart.multiplier), 0);
+    setCurrentDarts([]);
+    handleSubmit(totalScore);
+  };
+
+  const handleSubmit = (scoreOverride?: number) => {
+    if (winner || currentPlayer === 'dartbot') return;
+    const score = scoreOverride !== undefined ? scoreOverride : parseInt(inputScore, 10);
+    if (!isValidThrow(score)) {
+      setStatus(`Invalid score: ${score}`);
+      return;
+    }
+    applyThrow('user', score);
+    setInputScore('0');
+  };
+
   const isValidThrow = (val: number) => val >= 0 && val <= 180 && ![179, 178, 176, 175, 173, 172, 169, 166, 163].includes(val);
+
+  // Handle leg completion and reset for next leg
+  const handleLegWin = (legWinner: Player) => {
+    const newUserLegsWon = legWinner === 'user' ? userLegsWon + 1 : userLegsWon;
+    const newBotLegsWon = legWinner === 'dartbot' ? botLegsWon + 1 : botLegsWon;
+
+    // Check if set is won (first to 3 legs wins a set)
+    if (newUserLegsWon >= legsToWinSet || newBotLegsWon >= legsToWinSet) {
+      // Set is won
+      const newUserSetsWon = newUserLegsWon >= legsToWinSet ? userSetsWon + 1 : userSetsWon;
+      const newBotSetsWon = newBotLegsWon >= legsToWinSet ? botSetsWon + 1 : botSetsWon;
+
+      // Check if match is over (based on required sets to win)
+      if (newUserSetsWon >= requiredToWin || newBotSetsWon >= requiredToWin) {
+        setUserLegsWon(newUserLegsWon);
+        setBotLegsWon(newBotLegsWon);
+        setUserSetsWon(newUserSetsWon);
+        setBotSetsWon(newBotSetsWon);
+        setMatchWinner(newUserSetsWon >= requiredToWin ? 'user' : 'dartbot');
+        return;
+      }
+
+      // Set won but match continues - reset legs to 0-0 for next set
+      setUserLegsWon(0);
+      setBotLegsWon(0);
+      setUserSetsWon(newUserSetsWon);
+      setBotSetsWon(newBotSetsWon);
+      setCurrentLegNumber(1); // Reset leg counter for new set
+      setUserScore(startingScore);
+      setBotScore(startingScore);
+      setWinner(null);
+      setInputScore('0');
+      // Alternate first player for next set (if user won coin toss first leg of set, dartbot throws first in new set)
+      const nextFirstPlayer = initialFirstPlayer === 'user' ? (newUserSetsWon % 2 === 0 ? 'user' : 'dartbot') : (newUserSetsWon % 2 === 0 ? 'dartbot' : 'user');
+      setCurrentPlayer(nextFirstPlayer);
+      setStatus(`Set ${newUserSetsWon + newBotSetsWon} won! Starting Leg 1 of Set ${newUserSetsWon + newBotSetsWon + 1}. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
+      // Mark where the next leg starts for per-leg calculations
+      setCurrentLegStartIndex(userThrows.length);
+      // Reset per-leg tracking
+      setUserCheckoutDarts(null);
+      setUserCheckoutDoubles(null);
+      setDoubleAttempts(0);
+      return;
+    }
+
+    // Leg won but set continues - reset for next leg
+    setUserLegsWon(newUserLegsWon);
+    setBotLegsWon(newBotLegsWon);
+    setCurrentLegNumber((prev) => prev + 1);
+    setUserScore(startingScore);
+    setBotScore(startingScore);
+    setWinner(null);
+    setInputScore('0');
+    // Alternate first player for next leg - swap who threw first each leg
+    const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
+    setCurrentPlayer(nextFirstPlayer);
+    setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
+    // Mark where the next leg starts for per-leg calculations
+    setCurrentLegStartIndex(userThrows.length);
+    // Reset per-leg tracking
+    setUserCheckoutDarts(null);
+    setUserCheckoutDoubles(null);
+    setDoubleAttempts(0);
+  };
 
   const applyThrow = (player: Player, throwScore: number) => {
     const needsDouble = outRule === 'double';
@@ -104,6 +253,13 @@ export default function GameScreen() {
         userCheckoutDarts,
         userCheckoutDoubles,
         doubleAttempts,
+        userLegsWon,
+        botLegsWon,
+        userSetsWon,
+        botSetsWon,
+        cumulativeDoubleAttempts,
+        cumulativeCheckoutSuccess,
+        currentLegStartIndex,
       },
     ]);
 
@@ -177,6 +333,8 @@ export default function GameScreen() {
           setUserCheckoutDarts(3);
           setUserCheckoutDoubles(1);
           setDoubleAttempts((prev) => prev + 1);
+          setCumulativeDoubleAttempts((prev) => prev + 1);
+          setCumulativeCheckoutSuccess((prev) => prev + 1);
           // Calculate best leg based on current throws + checkout darts
           setUserThrows((currentThrows) => {
             const totalDartsThisLeg = Math.max(0, currentThrows.length - 1) * 3 + 3;
@@ -186,7 +344,9 @@ export default function GameScreen() {
             return currentThrows;
           });
           setWinner('user');
-          setStatus('You win!');
+          setStatus('You win this leg!');
+          // Handle leg win after a short delay to show the win message
+          setTimeout(() => handleLegWin('user'), 1000);
         } else {
           // Check out achieved - show checkout prompt (don't set score yet)
           setCheckoutScore(scoreBefore);
@@ -195,7 +355,9 @@ export default function GameScreen() {
       } else {
         setBotScore(0);
         setWinner(player);
-        setStatus(`Dartbot wins!`);
+        setStatus(`Dartbot wins this leg!`);
+        // Handle leg win after a short delay to show the win message
+        setTimeout(() => handleLegWin('dartbot'), 1000);
       }
     } else {
       // Normal subtraction
@@ -217,15 +379,6 @@ export default function GameScreen() {
       }
       setCurrentPlayer(player === 'user' ? 'dartbot' : 'user');
     }
-  };
-
-  const handleSubmit = () => {
-    if (winner || currentPlayer === 'dartbot') return;
-    if (!inputScore) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const val = parseInt(inputScore, 10);
-    applyThrow('user', val);
-    setInputScore('0');
   };
 
   const handleUndo = () => {
@@ -258,6 +411,13 @@ export default function GameScreen() {
       setUserCheckoutDarts(targetState.userCheckoutDarts);
       setUserCheckoutDoubles(targetState.userCheckoutDoubles);
       setDoubleAttempts(targetState.doubleAttempts);
+      setUserLegsWon(targetState.userLegsWon);
+      setBotLegsWon(targetState.botLegsWon);
+      setUserSetsWon(targetState.userSetsWon);
+      setBotSetsWon(targetState.botSetsWon);
+      setCumulativeDoubleAttempts(targetState.cumulativeDoubleAttempts);
+      setCumulativeCheckoutSuccess(targetState.cumulativeCheckoutSuccess);
+      setCurrentLegStartIndex(targetState.currentLegStartIndex);
       
       return prev.slice(0, -statesToUndo);
     });
@@ -268,6 +428,7 @@ export default function GameScreen() {
     const attempts = parseInt(dartsAtDouble, 10);
     if (!Number.isNaN(attempts) && attempts > 0) {
       setDoubleAttempts((prev) => prev + attempts);
+      setCumulativeDoubleAttempts((prev) => prev + attempts);
     }
     
     // Apply the deferred throw now (if any)
@@ -294,6 +455,8 @@ export default function GameScreen() {
       setUserCheckoutDoubles(doubles);
       if (!Number.isNaN(doubles) && doubles > 0) {
         setDoubleAttempts((prev) => prev + doubles);
+        setCumulativeDoubleAttempts((prev) => prev + doubles);
+        setCumulativeCheckoutSuccess((prev) => prev + 1);
       }
       
       // Calculate stats and set winner
@@ -304,7 +467,9 @@ export default function GameScreen() {
       }
       
       setWinner('user');
-      setStatus('You win!');
+      setStatus('You win this leg!');
+      // Handle leg win after a short delay to show the win message
+      setTimeout(() => handleLegWin('user'), 1000);
     }
     setCheckoutDartsInput('');
     setCheckoutDoublesInput('');
@@ -322,7 +487,7 @@ export default function GameScreen() {
       // For 100,101,104,107,110 and odd < 40: allow 2 or 3 darts to checkout
       dartsOptions: (isOddUnder40 || isSpecialPrompt) ? ['2', '3'] : ['1', '2', '3'],
       // For even 2-40, odd < 40, and special prompts: allow 1 or 2 darts at double
-      doublesOptions: (isOddUnder40 || isEvenBetween2And40 || isSpecialPrompt) ? ['1', '2'] : ['0', '1', '2', '3'],
+      doublesOptions: (isOddUnder40 || isEvenBetween2And40 || isSpecialPrompt) ? ['1', '2', '3'] : ['0', '1', '2', '3'],
     };
   };
 
@@ -335,37 +500,42 @@ export default function GameScreen() {
         checkoutRate: 0,
         lastScore: 0,
         dartsThrown: 0,
+        checkoutAttempts: 0,
+        checkoutSuccess: 0,
       };
     }
 
-    const turns = userThrows.length;
-    const dartsInLeg = userCheckoutDarts
+    // Current leg throws only for per-leg stats
+    const currentLegThrows = userThrows.slice(currentLegStartIndex);
+    const turns = currentLegThrows.length;
+    const dartsInCurrentLeg = userCheckoutDarts
       ? Math.max(0, turns - 1) * 3 + userCheckoutDarts
       : turns * 3;
 
-    // 3DA is total score divided by actual darts thrown, normalized to 3-dart average
-    const allTotal = userThrows.reduce((a, b) => a + b, 0);
-    const threeDartAvg = dartsInLeg > 0 ? ((allTotal / dartsInLeg) * 3).toFixed(2) : 0;
+    // 3DA is total score divided by actual darts thrown in current leg
+    const currentLegTotal = currentLegThrows.reduce((a, b) => a + b, 0);
+    const threeDartAvg = dartsInCurrentLeg > 0 ? ((currentLegTotal / dartsInCurrentLeg) * 3).toFixed(2) : 0;
     
-    // 9DA is first 3 turns only (first 3 throws)
-    const first3 = userThrows.slice(0, 3);
+    // 9DA is first 3 turns of current leg only
+    const first3 = currentLegThrows.slice(0, 3);
     const first3Total = first3.reduce((a, b) => a + b, 0);
     const first9Avg = first3.length === 3 ? ((first3Total / 9) * 3).toFixed(2) : 0;
 
-    const checkoutAttempts = doubleAttempts;
-    const checkoutSuccess = userCheckoutDoubles && userCheckoutDoubles > 0 ? 1 : 0;
-    const checkoutRate = checkoutAttempts > 0 ? ((checkoutSuccess / checkoutAttempts) * 100).toFixed(2) : 0;
+    // Use cumulative stats for checkout rate across the entire match
+    const checkoutAttempts = cumulativeDoubleAttempts || 0;
+    const checkoutSuccess = cumulativeCheckoutSuccess || 0;
+    const checkoutRate = checkoutAttempts > 0 ? ((checkoutSuccess / checkoutAttempts) * 100).toFixed(2) : '0';
     
     return {
       threeDartAvg: parseFloat(threeDartAvg as string) || 0,
       first9Avg: parseFloat(first9Avg as string) || 0,
-      checkoutRate,
-      checkoutAttempts,
-      checkoutSuccess,
-      lastScore: userThrows[userThrows.length - 1] || 0,
-      dartsThrown: dartsInLeg,
+      checkoutRate: parseFloat(checkoutRate as string) || 0,
+      checkoutAttempts: checkoutAttempts || 0,
+      checkoutSuccess: checkoutSuccess || 0,
+      lastScore: currentLegThrows[currentLegThrows.length - 1] || 0,
+      dartsThrown: dartsInCurrentLeg,
     };
-  }, [userThrows, userCheckoutDarts, userCheckoutDoubles, doubleAttempts]);
+  }, [userThrows, userCheckoutDarts, userCheckoutDoubles, cumulativeDoubleAttempts, cumulativeCheckoutSuccess, currentLegStartIndex]);
 
   const generateBotThrow = (): number => {
     // Simple model: target mean increases with level, some randomness; try to finish if possible
@@ -403,6 +573,22 @@ export default function GameScreen() {
     return () => clearTimeout(timer);
   }, [currentPlayer, winner]);
 
+  // Handle back button
+  const navigation = useNavigation();
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      if (matchWinner) {
+        // Allow navigation if match is over
+        return;
+      }
+      // Prevent default behavior (going back)
+      e.preventDefault();
+      // Show quit confirmation
+      setShowQuitConfirm(true);
+    });
+    return unsubscribe;
+  }, [navigation, matchWinner]);
+
   const renderButton = (label: string, onPress: () => void, style?: any) => (
     <Button
       mode="contained"
@@ -416,7 +602,49 @@ export default function GameScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Stats Button */}
+      <View style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000 }}>
+        <Button
+          mode="contained"
+          onPress={() => setShowStatsModal(true)}
+          icon="chart-bar"
+          compact
+        >
+          Stats
+        </Button>
+      </View>
       <ScrollView style={styles.content}>
+        {/* Match Header - Show set/leg count */}
+        <View style={{ marginBottom: 12, backgroundColor: theme.colors.surfaceVariant, padding: 12, borderRadius: 8 }}>
+          {legOrSet === 'Sets' ? (
+            <>
+              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center' }}>
+                {gameFormat} • Set {userSetsWon + botSetsWon + 1}, Leg {currentLegNumber}
+              </Text>
+              <Text variant="headlineSmall" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 8, fontWeight: 'bold' }}>
+                Sets: You {userSetsWon} - {botSetsWon} Dartbot
+              </Text>
+              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 6 }}>
+                Legs: You {userLegsWon} - {botLegsWon} Dartbot
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center' }}>
+                {gameFormat} • Leg {currentLegNumber}
+              </Text>
+              <Text variant="headlineSmall" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 8, fontWeight: 'bold' }}>
+                You {userLegsWon} - {botLegsWon} Dartbot
+              </Text>
+            </>
+          )}
+          {matchWinner && (
+            <Text variant="displaySmall" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 12, fontWeight: 'bold' }}>
+              {matchWinner === 'user' ? 'YOU WIN THE MATCH!' : 'DARTBOT WINS THE MATCH!'}
+            </Text>
+          )}
+        </View>
+
         {/* Scoreboard */}
         <View style={styles.scoreRow}>
           <View style={[styles.scoreCard, { backgroundColor: theme.colors.surfaceVariant, borderColor: currentPlayer === 'user' ? theme.colors.primary : theme.colors.outline }]}>
@@ -430,16 +658,7 @@ export default function GameScreen() {
               3 Dart Avg: {userStats.threeDartAvg}
             </Text>
             <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              First 9 Dart Avg: {userStats.first9Avg}
-            </Text>
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              Checkout Rate: {userStats.checkoutRate}% ({userStats.checkoutSuccess}/{userStats.checkoutAttempts || 0})
-            </Text>
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
               Last Turn: {userStats.lastScore}
-            </Text>
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              Best Leg: {userBestLeg}
             </Text>
             <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
               Darts Thrown: {userStats.dartsThrown}
@@ -455,19 +674,62 @@ export default function GameScreen() {
           </View>
         </View>
 
+        {/* Toggle Scoring Mode */}
+        <Button
+          mode={scoringMode === 'keypad' ? 'contained' : 'outlined'}
+          onPress={() => {
+            setScoringMode(scoringMode === 'keypad' ? 'perDart' : 'keypad');
+            setCurrentDarts([]);
+            setSelectedMultiplier(1);
+            setInputScore('0');
+          }}
+          style={{ marginBottom: 12 }}
+          disabled={winner !== null || currentPlayer === 'dartbot'}
+        >
+          {scoringMode === 'keypad' ? 'Switch to Per-Dart' : 'Switch to Keypad'}
+        </Button>
+
+        {/* Input Display */}
         <View style={[styles.display, { backgroundColor: theme.colors.surfaceVariant }]}>
-          <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, marginBottom: 6 }}>
-            {winner ? 'Game Over' : currentPlayer === 'user' ? 'Your turn' : 'Dartbot thinking...'}
-          </Text>
-          <Text variant="displayLarge" style={{ color: theme.colors.onSurfaceVariant }}>
-            {winner ? (winner === 'user' ? 'You win!' : 'Dartbot wins!') : inputScore || '0'}
-          </Text>
-          <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 6 }}>
-            {status}
-          </Text>
+          {scoringMode === 'keypad' ? (
+            <>
+              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, marginBottom: 6 }}>
+                {winner ? 'Game Over' : currentPlayer === 'user' ? 'Your turn' : 'Dartbot thinking...'}
+              </Text>
+              <Text variant="displayLarge" style={{ color: theme.colors.onSurfaceVariant }}>
+                {winner ? (winner === 'user' ? 'You win!' : 'Dartbot wins!') : inputScore || '0'}
+              </Text>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 6 }}>
+                {status}
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, marginBottom: 6 }}>
+                {winner ? 'Game Over' : currentPlayer === 'user' ? 'Your turn' : 'Dartbot thinking...'}
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 8 }}>
+                {currentDarts.map((dart, index) => (
+                  <Text key={index} variant="headlineMedium" style={{ color: theme.colors.onSurfaceVariant, marginHorizontal: 4 }}>
+                    {dart.label}
+                  </Text>
+                ))}
+                {currentDarts.length === 0 && (
+                  <Text variant="headlineMedium" style={{ color: theme.colors.onSurfaceVariant }}>---</Text>
+                )}
+              </View>
+              <Text variant="displayMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                {currentDarts.reduce((sum, dart) => sum + (dart.value * dart.multiplier), 0)}
+              </Text>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 6 }}>
+                {status}
+              </Text>
+            </>
+          )}
         </View>
 
-        {/* Keypad */}
+        {/* Scoring Input */}
+        {scoringMode === 'keypad' ? (
         <View style={styles.keypad}>
           <View style={styles.row}>
             {renderButton('1', () => handleNumberPress('1'))}
@@ -489,17 +751,126 @@ export default function GameScreen() {
             {renderButton('0', () => handleNumberPress('0'))}
             {renderButton('⌫', handleBackspace, { backgroundColor: theme.colors.tertiary })}
           </View>
-        </View>
 
         {/* Submit Button */}
         <Button
           mode="contained"
-          onPress={handleSubmit}
+          onPress={() => handleSubmit()}
           style={styles.submitButton}
           disabled={currentPlayer === 'dartbot' || !!winner}
         >
           Submit Score
         </Button>
+        </View>
+        ) : (
+        <View style={styles.perDartContainer}>
+          {/* Bull and 25 buttons */}
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+            <Button
+              mode="contained"
+              onPress={() => handleDartSelect(50, 1, 'Bull')}
+              style={{ flex: 1 }}
+              disabled={winner !== null || currentPlayer === 'dartbot' || currentDarts.length >= 3}
+            >
+              Bull (50)
+            </Button>
+            <Button
+              mode="contained"
+              onPress={() => handleDartSelect(25, 1, '25')}
+              style={{ flex: 1 }}
+              disabled={winner !== null || currentPlayer === 'dartbot' || currentDarts.length >= 3}
+            >
+              25
+            </Button>
+          </View>
+
+          {/* Multiplier Selection */}
+          <Text variant="titleMedium" style={{ color: theme.colors.onSurface, marginBottom: 8 }}>Select Multiplier:</Text>
+          <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+            <Button
+              mode={selectedMultiplier === 1 ? 'contained' : 'outlined'}
+              onPress={() => setSelectedMultiplier(1)}
+              style={{ flex: 1 }}
+              disabled={winner !== null || currentPlayer === 'dartbot'}
+            >
+              Single
+            </Button>
+            <Button
+              mode={selectedMultiplier === 2 ? 'contained' : 'outlined'}
+              onPress={() => setSelectedMultiplier(2)}
+              style={{ flex: 1 }}
+              disabled={winner !== null || currentPlayer === 'dartbot'}
+            >
+              Double
+            </Button>
+            <Button
+              mode={selectedMultiplier === 3 ? 'contained' : 'outlined'}
+              onPress={() => setSelectedMultiplier(3)}
+              style={{ flex: 1 }}
+              disabled={winner !== null || currentPlayer === 'dartbot'}
+            >
+              Treble
+            </Button>
+          </View>
+
+          {/* Number Grid (1-20) */}
+          <Text variant="titleMedium" style={{ color: theme.colors.onSurface, marginBottom: 8 }}>Select Number:</Text>
+          <View style={styles.dartTable}>
+            {[0, 1, 2, 3].map((rowIndex) => (
+              <View key={rowIndex} style={styles.dartTableRow}>
+                {[1, 2, 3, 4, 5].map((colIndex) => {
+                  const num = rowIndex * 5 + colIndex;
+                  return (
+                    <Button
+                      key={colIndex}
+                      mode="outlined"
+                      onPress={() => handleDartSelect(num)}
+                      style={[styles.dartTableCell, styles.dartTableButton]}
+                      labelStyle={{ fontSize: 18, fontWeight: 'bold' }}
+                      disabled={winner !== null || currentPlayer === 'dartbot' || currentDarts.length >= 3}
+                    >
+                      {num}
+                    </Button>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+          {/* Control Buttons */}
+          <View style={{ flexDirection: 'row', marginTop: 16, gap: 8 }}>
+            <Button
+              mode="outlined"
+              onPress={handleDartRemove}
+              style={{ flex: 1 }}
+              icon="arrow-left"
+              disabled={winner !== null || currentPlayer === 'dartbot' || currentDarts.length === 0}
+            >
+              Back
+            </Button>
+            <Button
+              mode="outlined"
+              onPress={() => {
+                if (currentDarts.length < 3) {
+                  handleDartSelect(0, 1, 'Miss');
+                }
+              }}
+              style={{ flex: 1 }}
+              disabled={winner !== null || currentPlayer === 'dartbot' || currentDarts.length >= 3}
+            >
+              MISS
+            </Button>
+          </View>
+          <Button
+            mode="contained"
+            onPress={handlePerDartConfirm}
+            style={styles.submitButton}
+            disabled={winner !== null || currentPlayer === 'dartbot' || currentDarts.length === 0}
+          >
+            Confirm ({currentDarts.length} dart{currentDarts.length !== 1 ? 's' : ''})
+          </Button>
+        </View>
+        )}
+
         {initialFirstPlayer === 'user' && (
           <Button
             mode="outlined"
@@ -520,7 +891,7 @@ export default function GameScreen() {
             Undo Last Turn
           </Button>
         )}
-        {winner && (
+        {matchWinner && (
           <Button
             mode="outlined"
             onPress={() => router.replace('/screens/HomeScreen')}
@@ -649,6 +1020,223 @@ export default function GameScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Stats Modal */}
+      <Modal visible={showStatsModal} transparent={true} animationType="slide" presentationStyle="pageSheet">
+        <View style={[styles.modalOverlay, { backgroundColor: `${theme.colors.background}E6` }]}>
+          <ScrollView style={[styles.modalContent, { backgroundColor: theme.colors.background, maxWidth: '90%' }]}>
+            <Text variant="headlineMedium" style={{ color: theme.colors.onBackground, marginBottom: 16, textAlign: 'center' }}>
+              Match Statistics
+            </Text>
+            
+            {/* Tab Navigation */}
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+              <Button
+                mode={statsPage === 'overview' ? 'contained' : 'outlined'}
+                onPress={() => setStatsPage('overview')}
+                style={{ flex: 1 }}
+              >
+                Overview
+              </Button>
+              <Button
+                mode={statsPage === 'scores' ? 'contained' : 'outlined'}
+                onPress={() => setStatsPage('scores')}
+                style={{ flex: 1 }}
+              >
+                Scores
+              </Button>
+            </View>
+
+            {statsPage === 'overview' ? (
+            <>
+            {/* Game Info */}
+            <View style={{ backgroundColor: theme.colors.surfaceVariant, padding: 12, borderRadius: 8, marginBottom: 16 }}>
+              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center' }}>
+                {gameFormat}
+              </Text>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 4 }}>
+                {outRule === 'double' ? 'DOUBLE OUT' : 'STRAIGHT IN'}
+              </Text>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 4 }}>
+                Sets: You {userSetsWon} - {botSetsWon} Dartbot
+              </Text>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 2 }}>
+                Current: Set {userSetsWon + botSetsWon + 1}, Leg {currentLegNumber} • Legs: You {userLegsWon} - {botLegsWon} Dartbot
+              </Text>
+            </View>
+
+            {/* Stats Table */}
+            <View style={styles.statsTable}>
+              {/* Header Row */}
+              <View style={styles.statsRow}>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>You</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}> </Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot</Text>
+              </View>
+
+              {/* 3-dart average */}
+              <View style={[styles.statsRow, styles.statsRowAlt]}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.threeDartAvg || '0'}</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>3-dart average</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* First 9 avg */}
+              <View style={styles.statsRow}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.first9Avg || '0'}</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>First 9 avg.</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* Checkout rate */}
+              <View style={[styles.statsRow, styles.statsRowAlt]}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.checkoutRate || '0'}%</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Checkout rate</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* Checkouts */}
+              <View style={styles.statsRow}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.checkoutSuccess}/{userStats.checkoutAttempts || 0}</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Checkouts</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* Highest finish */}
+              <View style={[styles.statsRow, styles.statsRowAlt]}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userCheckoutDarts && userCheckoutDarts > 0 ? startingScore - userScore : '-'}</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Highest finish</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* Highest score */}
+              <View style={styles.statsRow}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{Math.max(...userThrows, 0)}</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Highest score</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* Best leg */}
+              <View style={[styles.statsRow, styles.statsRowAlt]}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userBestLeg > 0 ? `${userBestLeg} DARTS` : '-'}</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Best leg</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* Worst leg */}
+              <View style={styles.statsRow}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Worst leg</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* Darts Thrown This Leg */}
+              <View style={[styles.statsRow, styles.statsRowAlt]}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.dartsThrown || 0}</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Darts Thrown</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+
+              {/* Last Throw */}
+              <View style={styles.statsRow}>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.lastScore || 0}</Text>
+                <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Last Throw</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+              </View>
+            </View>
+            </>
+            ) : (
+            <>
+            {/* Scores Breakdown */}
+            <View style={styles.statsTable}>
+              {/* Header Row */}
+              <View style={styles.statsRow}>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>User</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Score Range</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot</Text>
+              </View>
+
+              {(() => {
+                const scoreRanges = [
+                  { label: '180', min: 180, max: 180 },
+                  { label: '171+', min: 171, max: 179 },
+                  { label: '151+', min: 151, max: 170 },
+                  { label: '131+', min: 131, max: 150 },
+                  { label: '111+', min: 111, max: 130 },
+                  { label: '91+', min: 91, max: 110 },
+                  { label: '71+', min: 71, max: 90 },
+                  { label: '51+', min: 51, max: 70 },
+                  { label: '31+', min: 31, max: 50 },
+                ];
+
+                return scoreRanges.map((range, index) => {
+                  const count = userThrows.filter((score) => score >= range.min && score <= range.max).length;
+                  const isAlt = index % 2 === 1;
+                  return (
+                    <View key={range.label} style={[styles.statsRow, isAlt && styles.statsRowAlt]}>
+                      <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>
+                        {count}
+                      </Text>
+                      <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>
+                        {range.label}
+                      </Text>
+                      <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>
+                        -
+                      </Text>
+                    </View>
+                  );
+                });
+              })()}
+            </View>
+            </>
+            )}
+
+            <Button
+              mode="contained"
+              onPress={() => {
+                setShowStatsModal(false);
+                setStatsPage('overview');
+              }}
+              style={{ marginTop: 24, marginBottom: 32 }}
+            >
+              Close
+            </Button>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Quit Confirmation Modal */}
+      <Modal visible={showQuitConfirm} transparent={true} animationType="fade">
+        <View style={[styles.modalOverlay, { backgroundColor: `${theme.colors.background}E6` }]}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.background }]}>
+            <Text variant="headlineSmall" style={{ color: theme.colors.onBackground, marginBottom: 24, textAlign: 'center' }}>
+              Do you want to quit this match?
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <Button
+                mode="outlined"
+                onPress={() => setShowQuitConfirm(false)}
+                style={{ flex: 1 }}
+              >
+                Cancel
+              </Button>
+              <Button
+                mode="contained"
+                onPress={() => {
+                  setShowQuitConfirm(false);
+                  setTimeout(() => {
+                    router.push('/screens/GameModesScreen');
+                  }, 100);
+                }}
+                buttonColor={theme.colors.error}
+                style={{ flex: 1 }}
+              >
+                Quit
+              </Button>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -751,5 +1339,64 @@ const styles = StyleSheet.create({
   buttonGrid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+  },
+  perDartContainer: {
+    marginVertical: 12,
+  },
+  dartTable: {
+    borderWidth: 1,
+    borderColor: '#444',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  dartTableRow: {
+    flexDirection: 'row',
+  },
+  dartTableCell: {
+    flex: 1,
+    padding: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 0.5,
+    borderColor: '#444',
+    minHeight: 48,
+  },
+  dartTableHeader: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  dartTableButton: {
+    margin: 0,
+    borderRadius: 0,
+  },
+  statsTable: {
+    borderWidth: 1,
+    borderColor: '#444',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  statsRow: {
+    flexDirection: 'row',
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#444',
+  },
+  statsRowAlt: {
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+  },
+  statsCell: {
+    flex: 1,
+  },
+  statsCellLeft: {
+    textAlign: 'left',
+    fontWeight: 'bold',
+  },
+  statsCellCenter: {
+    textAlign: 'center',
+    flex: 2,
+  },
+  statsCellRight: {
+    textAlign: 'right',
+    fontWeight: 'bold',
   },
 });
