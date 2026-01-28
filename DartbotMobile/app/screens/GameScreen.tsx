@@ -602,73 +602,59 @@ export default function GameScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Stats Button */}
-      <View style={{ position: 'absolute', top: 10, right: 10, zIndex: 1000 }}>
-        <Button
-          mode="contained"
-          onPress={() => setShowStatsModal(true)}
-          icon="chart-bar"
-          compact
-        >
-          Stats
-        </Button>
-      </View>
       <ScrollView style={styles.content}>
         {/* Match Header - Show set/leg count */}
-        <View style={{ marginBottom: 12, backgroundColor: theme.colors.surfaceVariant, padding: 12, borderRadius: 8 }}>
-          {legOrSet === 'Sets' ? (
-            <>
-              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center' }}>
-                {gameFormat} • Set {userSetsWon + botSetsWon + 1}, Leg {currentLegNumber}
+        <View style={{ marginBottom: 8, backgroundColor: theme.colors.surfaceVariant, padding: 8, borderRadius: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            {legOrSet === 'Sets' ? (
+              <>
+                <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant, fontWeight: 'bold', textAlign: 'center' }}>
+                  {gameFormat} • Set {userSetsWon + botSetsWon + 1}, Leg {currentLegNumber}
+                </Text>
+                <Text variant="titleSmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 3, fontWeight: 'bold', textAlign: 'center' }}>
+                  Sets: {userSetsWon} - {botSetsWon}
+                </Text>
+                <Text variant="labelSmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 2, textAlign: 'center' }}>
+                  Legs: {userLegsWon} - {botLegsWon}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant, fontWeight: 'bold', textAlign: 'center' }}>
+                  {gameFormat} • Leg {currentLegNumber}
+                </Text>
+                <Text variant="titleSmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 3, fontWeight: 'bold', textAlign: 'center' }}>
+                  {userLegsWon} - {botLegsWon}
+                </Text>
+              </>
+            )}
+            {matchWinner && (
+              <Text variant="labelSmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 3, fontWeight: 'bold', textAlign: 'center' }}>
+                {matchWinner === 'user' ? 'YOU WIN!' : 'BOT WINS!'}
               </Text>
-              <Text variant="headlineSmall" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 8, fontWeight: 'bold' }}>
-                Sets: You {userSetsWon} - {botSetsWon} Dartbot
-              </Text>
-              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 6 }}>
-                Legs: You {userLegsWon} - {botLegsWon} Dartbot
-              </Text>
-            </>
-          ) : (
-            <>
-              <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center' }}>
-                {gameFormat} • Leg {currentLegNumber}
-              </Text>
-              <Text variant="headlineSmall" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 8, fontWeight: 'bold' }}>
-                You {userLegsWon} - {botLegsWon} Dartbot
-              </Text>
-            </>
-          )}
-          {matchWinner && (
-            <Text variant="displaySmall" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 12, fontWeight: 'bold' }}>
-              {matchWinner === 'user' ? 'YOU WIN THE MATCH!' : 'DARTBOT WINS THE MATCH!'}
-            </Text>
-          )}
+            )}
+          </View>
+          <Button
+            mode="contained"
+            onPress={() => setShowStatsModal(true)}
+            icon="chart-bar"
+            compact
+          >
+            Stats
+          </Button>
         </View>
 
         {/* Scoreboard */}
         <View style={styles.scoreRow}>
           <View style={[styles.scoreCard, { backgroundColor: theme.colors.surfaceVariant, borderColor: currentPlayer === 'user' ? theme.colors.primary : theme.colors.outline }]}>
-            <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-              You
-            </Text>
-            <Text variant="headlineLarge" style={{ color: theme.colors.onSurfaceVariant }}>
+            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>You</Text>
+            <Text variant="headlineMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 2 }}>
               {userScore}
-            </Text>
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 8 }}>
-              3 Dart Avg: {userStats.threeDartAvg}
-            </Text>
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              Last Turn: {userStats.lastScore}
-            </Text>
-            <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-              Darts Thrown: {userStats.dartsThrown}
             </Text>
           </View>
           <View style={[styles.scoreCard, { backgroundColor: theme.colors.surfaceVariant, borderColor: currentPlayer === 'dartbot' ? theme.colors.primary : theme.colors.outline }]}>
-            <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant }}>
-              Dartbot
-            </Text>
-            <Text variant="headlineLarge" style={{ color: theme.colors.onSurfaceVariant }}>
+            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>Dartbot</Text>
+            <Text variant="headlineMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 2 }}>
               {botScore}
             </Text>
           </View>
@@ -824,9 +810,11 @@ export default function GameScreen() {
                     <Button
                       key={colIndex}
                       mode="outlined"
+                      compact
                       onPress={() => handleDartSelect(num)}
                       style={[styles.dartTableCell, styles.dartTableButton]}
-                      labelStyle={{ fontSize: 18, fontWeight: 'bold' }}
+                      labelStyle={{ fontSize: 12, fontWeight: 'bold' }}
+                      contentStyle={{ height: 40 }}
                       disabled={winner !== null || currentPlayer === 'dartbot' || currentDarts.length >= 3}
                     >
                       {num}
@@ -1246,19 +1234,19 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
   },
   scoreRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   scoreCard: {
     flex: 1,
-    marginHorizontal: 6,
-    padding: 12,
-    borderRadius: 16,
+    marginHorizontal: 4,
+    padding: 6,
+    borderRadius: 10,
     borderWidth: 2,
     alignItems: 'center',
     ...Platform.select({
@@ -1274,12 +1262,12 @@ const styles = StyleSheet.create({
     }),
   },
   display: {
-    padding: 20,
-    borderRadius: 20,
+    padding: 10,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
-    minHeight: 80,
+    marginBottom: 6,
+    minHeight: 50,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -1293,26 +1281,26 @@ const styles = StyleSheet.create({
     }),
   },
   keypad: {
-    marginVertical: 12,
+    marginVertical: 4,
   },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: 6,
   },
   button: {
     flex: 1,
-    marginHorizontal: 6,
-    paddingVertical: 8,
-    borderRadius: 12,
+    marginHorizontal: 3,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
   buttonLabel: {
-    fontSize: 24,
+    fontSize: 16,
     lineHeight: 32,
   },
   submitButton: {
-    marginVertical: 12,
-    paddingVertical: 8,
+    marginVertical: 4,
+    paddingVertical: 4,
   },
   modalOverlay: {
     flex: 1,
@@ -1354,12 +1342,12 @@ const styles = StyleSheet.create({
   },
   dartTableCell: {
     flex: 1,
-    padding: 8,
+    padding: 2,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 0.5,
     borderColor: '#444',
-    minHeight: 48,
+    minHeight: 36,
   },
   dartTableHeader: {
     backgroundColor: 'rgba(255, 255, 255, 0.05)',

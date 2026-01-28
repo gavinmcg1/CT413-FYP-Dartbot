@@ -45,8 +45,8 @@ export default function GameSettingsScreen() {
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }}>
-      <View style={{ padding: 16, gap: 16 }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+      <View style={{ flex: 1, padding: 12, gap: 10 }}>
         <Card style={{
           borderRadius: 18,
           ...Platform.select({
@@ -209,30 +209,24 @@ export default function GameSettingsScreen() {
           </Card.Content>
         </Card>
 
-        <Button
-          mode="contained"
-          onPress={handleContinue}
-          style={{
-            marginBottom: 8,
-            borderRadius: 14,
-            ...Platform.select({
-              ios: {
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.2,
-                shadowRadius: 8,
-              },
-            }),
-          }}
-          labelStyle={{ fontSize: 17, fontWeight: '600' }}
-        >
-          Continue
-        </Button>
-
-        <Button mode="text" onPress={() => router.back()}>
-          Back
-        </Button>
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 'auto' }}>
+          <Button
+            mode="text"
+            onPress={() => router.back()}
+            style={{ flex: 1 }}
+          >
+            Back
+          </Button>
+          <Button
+            mode="contained"
+            onPress={handleContinue}
+            style={{ flex: 1, borderRadius: 14 }}
+            labelStyle={{ fontSize: 16, fontWeight: '600' }}
+          >
+            Continue
+          </Button>
+        </View>
       </View>
-    </ScrollView>
+    </View>
   );
 }
