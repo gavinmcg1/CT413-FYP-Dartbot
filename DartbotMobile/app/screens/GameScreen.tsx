@@ -18,7 +18,7 @@ export default function GameScreen() {
   }, [params.startingScore]);
 
   const outRule = (params.outRule as string) || 'double';
-  const inRule = (params.inRule as string) || 'none'; // 'double' or 'none'
+  const inRule = (params.inRule as string) || 'straight'; // 'straight' or 'double'
   const level = parseInt(params.level as string, 10) || 10; // 1-18 from setup screen
   const formatType = (params.formatType as string) || 'First To'; // "Best Of" or "First To"
   const legOrSet = (params.legOrSet as string) || 'Legs'; // "Legs" or "Sets"
@@ -91,6 +91,8 @@ export default function GameScreen() {
     botSetsWon: number;
     cumulativeDoubleAttempts: number;
     cumulativeCheckoutSuccess: number;
+    cumulativeDoubleInAttempts: number;
+    cumulativeDoubleInSuccess: number;
     currentLegStartIndex: number;
     hasHitDoubleIn: boolean;
     doubleInAttempts: number;
@@ -178,8 +180,8 @@ export default function GameScreen() {
       return;
     }
     
-    // For double in, show prompt only on first valid score > 1 (user needs to score something meaningful)
-    if (inRule === 'double' && !hasHitDoubleIn && currentPlayer === 'user' && score > 1) {
+    // For double in, show prompt on the first valid non-zero score (user needs to score something meaningful)
+    if (inRule === 'double' && !hasHitDoubleIn && currentPlayer === 'user' && score > 0) {
       setDoubleInDartsInput('');
       setShowDoubleInPrompt(true);
       // Store the score to apply after confirming double in
@@ -315,6 +317,8 @@ export default function GameScreen() {
         botSetsWon,
         cumulativeDoubleAttempts,
         cumulativeCheckoutSuccess,
+        cumulativeDoubleInAttempts,
+        cumulativeDoubleInSuccess,
         currentLegStartIndex,
         hasHitDoubleIn,
         doubleInAttempts,
@@ -397,10 +401,9 @@ export default function GameScreen() {
         if (outRule !== 'double') {
           setUserScore(0);
           // Calculate how many darts were thrown (based on previous throws count)
-          const dartsThrown = currentDarts.length > 0 ? currentDarts.length : (scoringMode === 'keypad' ? 1 : 1);
+          const dartsThrown = currentDarts.length > 0 ? currentDarts.length : (scoringMode === 'keypad' ? 3 : 1);
           setUserCheckoutDarts(dartsThrown);
           setUserCheckoutDoubles(0); // Not applicable for straight out
-          setCumulativeDoubleAttempts((prev) => prev + 1);
           setCumulativeCheckoutSuccess((prev) => prev + 1);
           // Calculate best leg based on current throws + checkout darts
           setUserThrows((currentThrows) => {
@@ -520,6 +523,8 @@ export default function GameScreen() {
       setBotSetsWon(targetState.botSetsWon);
       setCumulativeDoubleAttempts(targetState.cumulativeDoubleAttempts);
       setCumulativeCheckoutSuccess(targetState.cumulativeCheckoutSuccess);
+      setCumulativeDoubleInAttempts(targetState.cumulativeDoubleInAttempts);
+      setCumulativeDoubleInSuccess(targetState.cumulativeDoubleInSuccess);
       setCurrentLegStartIndex(targetState.currentLegStartIndex);
       setHasHitDoubleIn(targetState.hasHitDoubleIn);
       setDoubleInAttempts(targetState.doubleInAttempts);
@@ -611,15 +616,16 @@ export default function GameScreen() {
   // Determine checkout button options based on score
   const getCheckoutOptions = (score: number) => {
     const isOddUnder40 = score % 2 !== 0 && score < 40;
+    const isUnder98 = score < 98 && score > 40;
     const isEvenBetween2And40 = score % 2 === 0 && score >= 2 && score <= 40;
     const specialPromptScores = [100, 101, 104, 107, 110];
     const isSpecialPrompt = specialPromptScores.includes(score);
 
     return {
       // For 100,101,104,107,110 and odd < 40: allow 2 or 3 darts to checkout
-      dartsOptions: (isOddUnder40 || isSpecialPrompt) ? ['2', '3'] : ['1', '2', '3'],
-      // For even 2-40, odd < 40, and special prompts: allow 1 or 2 darts at double
-      doublesOptions: (isOddUnder40 || isEvenBetween2And40 || isSpecialPrompt) ? ['1', '2', '3'] : ['0', '1', '2', '3'],
+      dartsOptions: (isOddUnder40 || isSpecialPrompt || isUnder98) ? ['2', '3'] : ['1', '2'],
+      // For even 2-40, odd < 40, and special prompts: allow 1,2,3 darts at double; for 41-98: allow 1,2; for 99,101+: allow 0,1,2,3
+      doublesOptions: (isEvenBetween2And40) ? ['1', '2', '3'] : (isUnder98 || isOddUnder40 || isSpecialPrompt) ? ['1', '2'] : ['2', '3'],
     };
   };
 
@@ -694,8 +700,6 @@ export default function GameScreen() {
     if (attempt > 180) attempt = 180;
     if (needsDouble && attempt > botCurrent) attempt = botCurrent - (botCurrent % 2);
     if (attempt < 0) attempt = 0;
-    // Validate throw is in valid range
-    if (attempt > 180) attempt = 180;
     return attempt;
   };
 
