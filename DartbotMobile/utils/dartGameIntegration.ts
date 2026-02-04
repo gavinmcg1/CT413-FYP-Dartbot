@@ -107,16 +107,37 @@ function mapBedToTarget(bed: string): Target | null {
 
 /**
  * Get hit probability for T20 based on skill level
- * Skill 1-5: 5-15% hit rate
- * Skill 6-10: 15-40% hit rate
- * Skill 11-15: 40-70% hit rate
- * Skill 16-18: 70-95% hit rate
+ * Uses empirical data from simulation results loaded via API
  */
 export function getT20HitProbability(skillLevel: number): number {
-  const binProb = currentAverageRange && simulationResults?.bins?.[currentAverageRange]?.predicted_p_hit_per_dart;
-  if (typeof binProb === 'number') return Math.max(0.02, Math.min(0.98, binProb));
-  // Linear interpolation: skill 1->5%, skill 18->90%
-  return 0.05 + (skillLevel - 1) / 17 * 0.85;
+  const bin = currentAverageRange ? simulationResults?.bins?.[currentAverageRange] : undefined;
+  const binProb = bin?.predicted_p_hit_per_dart;
+  const repAverage = bin?.rep_average;
+  const model = simulationResults?.model;
+
+  // Debug logging
+  console.log(`[T20HitProb] Level: ${skillLevel}, Range: ${currentAverageRange}, BinProb: ${binProb}, RepAvg: ${repAverage}, Model: ${model ? `${model.slope},${model.intercept}` : 'none'}, Bins: ${simulationResults?.bins ? Object.keys(simulationResults.bins) : 'none'}`);
+
+  if (typeof binProb === 'number') {
+    // If predicted bin values look unrealistic for low averages, fall back to model
+    if (model && typeof repAverage === 'number') {
+      const modelProb = model.slope * repAverage + model.intercept;
+      const modelClamped = Math.max(0.02, Math.min(0.98, modelProb));
+
+      if (repAverage <= 60 && binProb >= 0.4) {
+        console.warn(`[T20HitProb] BinProb looks too high for repAvg ${repAverage}. Using model: ${modelProb} → ${modelClamped}`);
+        return modelClamped;
+      }
+    }
+
+    const clamped = Math.max(0.02, Math.min(0.98, binProb));
+    console.log(`[T20HitProb] Using API bin: ${binProb} → ${clamped}`);
+    return clamped;
+  }
+  
+  // Fallback if simulation data not loaded yet - should rarely happen
+  console.warn('[T20HitProb] Simulation data not available, using fallback probability');
+  return 0.5; // Default 50% hit rate as fallback
 }
 
 /**
@@ -478,16 +499,30 @@ export function formatBotDarts(darts: BotDartThrow[]): string {
 
 /**
  * Map level (1-18) to checkout average range bin
+ * Aligned with simulation_results.json bins
  */
 export function getAverageRangeForLevel(level: number): string {
-  if (level <= 4) return '30-39';
-  if (level <= 6) return '40-49';
-  if (level <= 8) return '50-59';
-  if (level <= 10) return '60-69';
-  if (level <= 12) return '70-79';
-  if (level <= 14) return '80-89';
-  if (level <= 16) return '90-99';
-  return '100-109';
+  const levelAverages: Record<number, string> = {
+    1: '20-29',
+    2: '20-29',
+    3: '30-39',
+    4: '30-39',
+    5: '40-49',
+    6: '40-49',
+    7: '50-59',
+    8: '50-59',
+    9: '60-69',
+    10: '60-69',
+    11: '70-79',
+    12: '70-79',
+    13: '80-89',
+    14: '80-89',
+    15: '90-99',
+    16: '90-99',
+    17: '100-109',
+    18: '110+',
+  };
+  return levelAverages[level] ?? '60-69';
 }
 
 /**

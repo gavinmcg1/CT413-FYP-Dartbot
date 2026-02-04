@@ -77,9 +77,19 @@ export default function GameScreen() {
   const [doubleAttempts, setDoubleAttempts] = useState<number>(0);
   const [currentLegStartIndex, setCurrentLegStartIndex] = useState<number>(0);
   
+  // Bot stats tracking
+  const [botThrows, setBotThrows] = useState<number[]>([]);
+  const [botBestLeg, setBotBestLeg] = useState<number>(0);
+  const [botCheckoutDarts, setBotCheckoutDarts] = useState<number | null>(null);
+  const [botCheckoutDoubles, setBotCheckoutDoubles] = useState<number | null>(null);
+  const [botDoubleAttempts, setBotDoubleAttempts] = useState<number>(0);
+  const [botCurrentLegStartIndex, setBotCurrentLegStartIndex] = useState<number>(0);
+  
   // Cumulative stats across all legs
   const [cumulativeDoubleAttempts, setCumulativeDoubleAttempts] = useState<number>(0);
   const [cumulativeCheckoutSuccess, setCumulativeCheckoutSuccess] = useState<number>(0);
+  const [botCumulativeDoubleAttempts, setBotCumulativeDoubleAttempts] = useState<number>(0);
+  const [botCumulativeCheckoutSuccess, setBotCumulativeCheckoutSuccess] = useState<number>(0);
 
   // Double In stats
   const [hasHitDoubleIn, setHasHitDoubleIn] = useState<boolean>(false);
@@ -112,6 +122,14 @@ export default function GameScreen() {
     hasHitDoubleIn: boolean;
     doubleInAttempts: number;
     doubleInSuccess: number;
+    botThrows: number[];
+    botBestLeg: number;
+    botCheckoutDarts: number | null;
+    botCheckoutDoubles: number | null;
+    botDoubleAttempts: number;
+    botCurrentLegStartIndex: number;
+    botCumulativeDoubleAttempts: number;
+    botCumulativeCheckoutSuccess: number;
   };
   const [history, setHistory] = useState<GameState[]>([]);
 
@@ -241,9 +259,7 @@ export default function GameScreen() {
       setCurrentPlayer(nextFirstPlayer);
       setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
       setCurrentLegStartIndex(userThrows.length);
-      setUserCheckoutDarts(null);
-      setUserCheckoutDoubles(null);
-      setDoubleAttempts(0);
+      setBotCurrentLegStartIndex(botThrows.length);
       return;
     }
 
@@ -279,9 +295,7 @@ export default function GameScreen() {
       setCurrentPlayer(nextFirstPlayer);
       setStatus(`Set ${newUserSetsWon + newBotSetsWon} won! Starting Leg 1 of Set ${newUserSetsWon + newBotSetsWon + 1}. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
       setCurrentLegStartIndex(userThrows.length);
-      setUserCheckoutDarts(null);
-      setUserCheckoutDoubles(null);
-      setDoubleAttempts(0);
+      setBotCurrentLegStartIndex(botThrows.length);
       return;
     }
 
@@ -300,10 +314,7 @@ export default function GameScreen() {
     setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
     // Mark where the next leg starts for per-leg calculations
     setCurrentLegStartIndex(userThrows.length);
-    // Reset per-leg tracking
-    setUserCheckoutDarts(null);
-    setUserCheckoutDoubles(null);
-    setDoubleAttempts(0);
+    setBotCurrentLegStartIndex(botThrows.length);
   };
 
   const applyThrow = (player: Player, throwScore: number) => {
@@ -338,6 +349,14 @@ export default function GameScreen() {
         hasHitDoubleIn,
         doubleInAttempts,
         doubleInSuccess,
+        botThrows: [...botThrows],
+        botBestLeg,
+        botCheckoutDarts,
+        botCheckoutDoubles,
+        botDoubleAttempts,
+        botCurrentLegStartIndex,
+        botCumulativeDoubleAttempts,
+        botCumulativeCheckoutSuccess,
       },
     ]);
 
@@ -466,6 +485,14 @@ export default function GameScreen() {
       } else {
         // Bot finished
         setBotScore(0);
+        // Calculate best leg based on current bot throws
+        setBotThrows((currentThrows) => {
+          const totalDartsThisLeg = Math.max(0, currentThrows.length - 1) * 3 + 3;
+          setBotBestLeg((prevBestLeg) => 
+            prevBestLeg === 0 || totalDartsThisLeg < prevBestLeg ? totalDartsThisLeg : prevBestLeg
+          );
+          return currentThrows;
+        });
         setLastDartMultiplier(1); // Reset for next leg
         setWinner(player);
         setStatus(`Dartbot wins this leg!`);
@@ -496,6 +523,7 @@ export default function GameScreen() {
         }
       } else {
         setBotScore(newScore);
+        setBotThrows((prev) => [...prev, throwScore]);
         setStatus(`Dartbot scored ${throwScore}. Next throw: You.`);
         setCurrentPlayer('user');
       }
@@ -544,6 +572,14 @@ export default function GameScreen() {
       setHasHitDoubleIn(targetState.hasHitDoubleIn);
       setDoubleInAttempts(targetState.doubleInAttempts);
       setDoubleInSuccess(targetState.doubleInSuccess);
+      setBotThrows(targetState.botThrows);
+      setBotBestLeg(targetState.botBestLeg);
+      setBotCheckoutDarts(targetState.botCheckoutDarts);
+      setBotCheckoutDoubles(targetState.botCheckoutDoubles);
+      setBotDoubleAttempts(targetState.botDoubleAttempts);
+      setBotCurrentLegStartIndex(targetState.botCurrentLegStartIndex);
+      setBotCumulativeDoubleAttempts(targetState.botCumulativeDoubleAttempts);
+      setBotCumulativeCheckoutSuccess(targetState.botCumulativeCheckoutSuccess);
       
       return prev.slice(0, -statesToUndo);
     });
@@ -690,19 +726,93 @@ export default function GameScreen() {
     };
   }, [userThrows, userCheckoutDarts, userCheckoutDoubles, cumulativeDoubleAttempts, cumulativeCheckoutSuccess, currentLegStartIndex]);
 
+  const botStats = useMemo(() => {
+    if (botThrows.length === 0) {
+      return {
+        threeDartAvg: 0,
+        first9Avg: 0,
+        checkoutRate: 0,
+        lastScore: 0,
+        dartsThrown: 0,
+        checkoutAttempts: 0,
+        checkoutSuccess: 0,
+      };
+    }
+
+    // Current leg throws only for per-leg stats
+    const currentLegThrows = botThrows.slice(botCurrentLegStartIndex);
+    const turns = currentLegThrows.length;
+    const dartsInCurrentLeg = botCheckoutDarts
+      ? Math.max(0, turns - 1) * 3 + botCheckoutDarts
+      : turns * 3;
+
+    // 3DA is total score divided by actual darts thrown in current leg
+    const currentLegTotal = currentLegThrows.reduce((a, b) => a + b, 0);
+    const threeDartAvg = dartsInCurrentLeg > 0 ? ((currentLegTotal / dartsInCurrentLeg) * 3).toFixed(2) : 0;
+    
+    // 9DA is first 3 turns of current leg only
+    const first3 = currentLegThrows.slice(0, 3);
+    const first3Total = first3.reduce((a, b) => a + b, 0);
+    const first9Avg = first3.length === 3 ? ((first3Total / 9) * 3).toFixed(2) : 0;
+
+    // Use cumulative stats for checkout rate across the entire match
+    const checkoutAttempts = botCumulativeDoubleAttempts || 0;
+    const checkoutSuccess = botCumulativeCheckoutSuccess || 0;
+    const checkoutRate = checkoutAttempts > 0 ? ((checkoutSuccess / checkoutAttempts) * 100).toFixed(2) : '0';
+    
+    return {
+      threeDartAvg: parseFloat(threeDartAvg as string) || 0,
+      first9Avg: parseFloat(first9Avg as string) || 0,
+      checkoutRate: parseFloat(checkoutRate as string) || 0,
+      checkoutAttempts: checkoutAttempts || 0,
+      checkoutSuccess: checkoutSuccess || 0,
+      lastScore: currentLegThrows[currentLegThrows.length - 1] || 0,
+      dartsThrown: dartsInCurrentLeg,
+    };
+  }, [botThrows, botCheckoutDarts, botCheckoutDoubles, botCumulativeDoubleAttempts, botCumulativeCheckoutSuccess, botCurrentLegStartIndex]);
+
   const generateBotThrow = async (): Promise<number> => {
     // Use new probability-based engine
     const remainingScore = botScore;
     let turnResult = simulateBotTurn(level, remainingScore, outRule as 'straight' | 'double');
     let checkoutProbFromData: number | null = null;
+    let isAttemptingCheckout = false;
+
+    // Get expected average range for this level to keep bot realistic
+    const expectedAverageRange = getAverageRangeForLevel(level);
+    let minAvg = 66; // default
+    let maxAvg = 70; // default
+    
+    // Parse the range (handle "110+" case)
+    if (expectedAverageRange.includes('-')) {
+      const [min, max] = expectedAverageRange.split('-').map(x => parseInt(x, 10));
+      minAvg = min;
+      maxAvg = max || min; // If only one number, use it as both
+    } else if (expectedAverageRange === '110+') {
+      minAvg = 110;
+      maxAvg = 120; // Cap at max possible 180
+    }
+    const targetAvg = (minAvg + maxAvg) / 2; // Middle of range is target
+
+    // Calculate current bot 3-dart average
+    const currentLegThrows = botThrows.slice(botCurrentLegStartIndex);
+    const turns = currentLegThrows.length;
+    const dartsInCurrentLeg = botCheckoutDarts
+      ? Math.max(0, turns - 1) * 3 + botCheckoutDarts
+      : turns * 3;
+    const currentLegTotal = currentLegThrows.reduce((a, b) => a + b, 0);
+    const currentThreeDartAvg = dartsInCurrentLeg > 0 ? (currentLegTotal / dartsInCurrentLeg) * 3 : 0;
 
     // If in checkout range, dynamically choose target per dart based on remaining score
     if (remainingScore <= 170) {
+      isAttemptingCheckout = true;
       try {
         const averageRange = getAverageRangeForLevel(level);
         const darts: typeof turnResult.darts = [];
         let turnScore = 0;
         let finished = false;
+        let doublesAttempted = 0;
+        let doublesHit = 0;
 
         for (let i = 0; i < 3; i++) {
           const scoreLeft = remainingScore - turnScore;
@@ -719,8 +829,20 @@ export default function GameScreen() {
 
           const intended = parseCheckoutTarget(firstTarget);
           const intendedWithVariance = applyIntendedHitVariance(intended, level, scoreLeft);
+          
+          // Track if aiming at double
+          const isAimingAtDouble = intendedWithVariance[0] === 'D';
+          if (isAimingAtDouble) {
+            doublesAttempted++;
+          }
+          
           const dart = simulateDartAtTarget(level, intendedWithVariance);
           darts.push(dart);
+          
+          // Track if double was hit
+          if (isAimingAtDouble && dart.actual && dart.actual[0] === 'D') {
+            doublesHit++;
+          }
 
           const newTurnScore = turnScore + dart.score;
           if (newTurnScore > remainingScore) {
@@ -748,6 +870,14 @@ export default function GameScreen() {
             break;
           }
         }
+        
+        // Update bot double stats based on actual darts thrown at doubles
+        if (doublesAttempted > 0) {
+          setBotCumulativeDoubleAttempts((prev) => prev + doublesAttempted);
+          if (doublesHit > 0) {
+            setBotCumulativeCheckoutSuccess((prev) => prev + doublesHit);
+          }
+        }
 
         if (!finished && darts.length > 0 && turnResult.totalScore === 0) {
           // Keep bust result as is
@@ -760,7 +890,28 @@ export default function GameScreen() {
       }
     }
 
-    return turnResult.totalScore;
+    // Clamp bot's throw to keep average realistic for skill level (not in checkout)
+    let finalThrow = turnResult.totalScore;
+    if (!isAttemptingCheckout && finalThrow > 0 && turns > 0) {
+      // Check if this throw would push average too far above target
+      const projectedNewTotal = currentLegTotal + finalThrow;
+      const projectedNewDarts = dartsInCurrentLeg + 3; // Adding 3 more darts
+      const projectedAvg = (projectedNewTotal / projectedNewDarts) * 3;
+
+      // If projected average is way above target (>25% over), reduce the throw
+      if (projectedAvg > targetAvg * 1.25) {
+        // Scale down the throw to keep it more realistic
+        const scaleFactor = (targetAvg * 1.25) / projectedAvg;
+        finalThrow = Math.floor(finalThrow * scaleFactor);
+      }
+      // If projected average is too low (<75% of target), encourage higher throws occasionally
+      else if (projectedAvg < targetAvg * 0.75 && Math.random() < 0.3) {
+        // 30% chance to keep the throw or boost it slightly
+        finalThrow = Math.min(finalThrow + 10, 180); // Slight boost
+      }
+    }
+
+    return finalThrow;
   };
 
   useEffect(() => {
@@ -1315,21 +1466,21 @@ export default function GameScreen() {
               <View style={[styles.statsRow, styles.statsRowAlt]}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.threeDartAvg ? userStats.threeDartAvg.toFixed(2) : '0.00'}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>3-dart average</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botStats.threeDartAvg ? botStats.threeDartAvg.toFixed(2) : '0.00'}</Text>
               </View>
 
               {/* First 9 avg */}
               <View style={styles.statsRow}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.first9Avg ? userStats.first9Avg.toFixed(2) : '0.00'}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>First 9 avg.</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botStats.first9Avg ? botStats.first9Avg.toFixed(2) : '0.00'}</Text>
               </View>
 
               {/* Checkout rate */}
               <View style={[styles.statsRow, styles.statsRowAlt]}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.checkoutRate ? userStats.checkoutRate.toFixed(2) : '0.00'}%</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Checkout rate</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botStats.checkoutRate ? botStats.checkoutRate.toFixed(2) : '0.00'}%</Text>
               </View>
 
               {inRule === 'double' && (
@@ -1344,28 +1495,28 @@ export default function GameScreen() {
               <View style={styles.statsRow}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.checkoutSuccess}/{userStats.checkoutAttempts || 0}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Checkouts</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botStats.checkoutSuccess}/{botStats.checkoutAttempts || 0}</Text>
               </View>
 
               {/* Highest finish */}
               <View style={[styles.statsRow, styles.statsRowAlt]}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userCheckoutDarts && userCheckoutDarts > 0 ? startingScore - userScore : '-'}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Highest finish</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botCheckoutDarts && botCheckoutDarts > 0 ? startingScore - botScore : '-'}</Text>
               </View>
 
               {/* Highest score */}
               <View style={styles.statsRow}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{Math.max(...userThrows, 0)}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Highest score</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{Math.max(...botThrows, 0)}</Text>
               </View>
 
               {/* Best leg */}
               <View style={[styles.statsRow, styles.statsRowAlt]}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userBestLeg > 0 ? `${userBestLeg} DARTS` : '-'}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Best leg</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botBestLeg > 0 ? `${botBestLeg} DARTS` : '-'}</Text>
               </View>
 
               {/* Worst leg */}
@@ -1379,14 +1530,14 @@ export default function GameScreen() {
               <View style={[styles.statsRow, styles.statsRowAlt]}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.dartsThrown || 0}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Darts Thrown</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botStats.dartsThrown || 0}</Text>
               </View>
 
               {/* Last Throw */}
               <View style={styles.statsRow}>
                 <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userStats.lastScore || 0}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Last Throw</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botStats.lastScore || 0}</Text>
               </View>
             </View>
             </>
@@ -1415,18 +1566,19 @@ export default function GameScreen() {
                 ];
 
                 return scoreRanges.map((range, index) => {
-                  const count = userThrows.filter((score) => score >= range.min && score <= range.max).length;
+                  const userCount = userThrows.filter((score) => score >= range.min && score <= range.max).length;
+                  const botCount = botThrows.filter((score) => score >= range.min && score <= range.max).length;
                   const isAlt = index % 2 === 1;
                   return (
                     <View key={range.label} style={[styles.statsRow, isAlt && styles.statsRowAlt]}>
                       <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>
-                        {count}
+                        {userCount}
                       </Text>
                       <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>
                         {range.label}
                       </Text>
                       <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>
-                        -
+                        {botCount}
                       </Text>
                     </View>
                   );

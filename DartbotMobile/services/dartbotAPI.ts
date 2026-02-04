@@ -6,7 +6,9 @@
 import axios, { AxiosInstance } from 'axios';
 
 // Configuration - adjust IP/port as needed for your local development
-const API_BASE_URL = 'http://192.168.1.100:5000'; // Update this to your backend IP
+const IS_WEB = typeof window !== 'undefined';
+const WEB_HOST = IS_WEB ? window.location.hostname : 'localhost';
+const API_BASE_URL = IS_WEB ? `http://${WEB_HOST}:5000` : 'http://192.168.1.100:5000'; // Update as needed
 const API_TIMEOUT = 5000;
 
 interface CheckoutRecommendation {
