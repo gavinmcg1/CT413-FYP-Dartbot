@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { ScrollView, View, Platform } from 'react-native';
 import { Button, Card, SegmentedButtons, Text, TextInput, useTheme, IconButton } from 'react-native-paper';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
 export default function GameSettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const botLevel = parseInt(params.level as string, 10) || 10;
 
   const [startingScore, setStartingScore] = useState<string>('501');
   const [customScore, setCustomScore] = useState<string>('');
@@ -34,7 +36,7 @@ export default function GameSettingsScreen() {
       formatNumber: parseInt(matchValue) || 3,
       inRule,
       outRule,
-      level: 10, // default level, will be overridden from GameSetupScreen if needed
+      level: botLevel, // Pass through from GameSetupScreen
     };
     console.log('Game settings:', settings);
     // Navigate to coin flip screen

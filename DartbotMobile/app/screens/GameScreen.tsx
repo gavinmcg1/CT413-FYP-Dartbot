@@ -4,6 +4,8 @@ import { Text, Button, useTheme } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
+import { dartbotAPI } from '../../services/dartbotAPI';
+import { simulateBotTurn, simulateDartAtTarget, parseCheckoutTarget, getAverageRangeForLevel, getT20HitProbability, getBotCheckoutProbability, formatBotDarts, setSimulationResults, setAverageRangeForSimulation, applyIntendedHitVariance } from '../../utils/dartGameIntegration';
 
 export default function GameScreen() {
   const theme = useTheme();
@@ -33,6 +35,19 @@ export default function GameScreen() {
   const [winner, setWinner] = useState<Player | null>(null);
   const [matchWinner, setMatchWinner] = useState<Player | null>(null);
   const [,setBotThinking] = useState<boolean>(false);
+
+  useEffect(() => {
+    let isActive = true;
+    const averageRange = getAverageRangeForLevel(level);
+    setAverageRangeForSimulation(averageRange);
+    dartbotAPI.getSimulationResults().then((data) => {
+      if (!isActive) return;
+      setSimulationResults(data, averageRange);
+    });
+    return () => {
+      isActive = false;
+    };
+  }, [level]);
 
   // Leg/Set tracking
   const requiredToWin = useMemo(() => {
@@ -675,40 +690,85 @@ export default function GameScreen() {
     };
   }, [userThrows, userCheckoutDarts, userCheckoutDoubles, cumulativeDoubleAttempts, cumulativeCheckoutSuccess, currentLegStartIndex]);
 
-  const generateBotThrow = (): number => {
-    // Simple model: target mean increases with level, some randomness; try to finish if possible
-    const botCurrent = botScore;
-    const needsDouble = outRule === 'double';
-    const noCheckout = [1, 159, 162, 163, 165, 166, 168, 169];
+  const generateBotThrow = async (): Promise<number> => {
+    // Use new probability-based engine
+    const remainingScore = botScore;
+    let turnResult = simulateBotTurn(level, remainingScore, outRule as 'straight' | 'double');
+    let checkoutProbFromData: number | null = null;
 
-    // Try to finish if feasible
-    if (botCurrent <= 170) {
-      if (!needsDouble || botCurrent % 2 === 0) {
-        // Only return checkout if it's valid
-        if (!noCheckout.includes(botCurrent)) {
-          return botCurrent; // attempt checkout
+    // If in checkout range, dynamically choose target per dart based on remaining score
+    if (remainingScore <= 170) {
+      try {
+        const averageRange = getAverageRangeForLevel(level);
+        const darts: typeof turnResult.darts = [];
+        let turnScore = 0;
+        let finished = false;
+
+        for (let i = 0; i < 3; i++) {
+          const scoreLeft = remainingScore - turnScore;
+          const recommendation = await dartbotAPI.getCheckoutRecommendation(scoreLeft, averageRange);
+          const sequence = recommendation?.best?.sequence;
+
+          if (typeof recommendation?.best?.success_prob === 'number') {
+            checkoutProbFromData = recommendation.best.success_prob;
+          }
+
+          const firstTarget = Array.isArray(sequence)
+            ? sequence[0]
+            : (sequence?.split('|')[0] ?? 't20');
+
+          const intended = parseCheckoutTarget(firstTarget);
+          const intendedWithVariance = applyIntendedHitVariance(intended, level, scoreLeft);
+          const dart = simulateDartAtTarget(level, intendedWithVariance);
+          darts.push(dart);
+
+          const newTurnScore = turnScore + dart.score;
+          if (newTurnScore > remainingScore) {
+            turnResult = { darts, totalScore: 0, finished: false };
+            break;
+          }
+
+          turnScore = newTurnScore;
+
+          if (newTurnScore === remainingScore) {
+            if (outRule === 'double') {
+              const isDouble = dart.actual && dart.actual[0] === 'D';
+              if (!isDouble) {
+                turnResult = { darts, totalScore: 0, finished: false };
+                break;
+              }
+            }
+            finished = true;
+            turnResult = { darts, totalScore: turnScore, finished };
+            break;
+          }
+
+          if (outRule === 'double' && newTurnScore === remainingScore - 1) {
+            turnResult = { darts, totalScore: 0, finished: false };
+            break;
+          }
         }
+
+        if (!finished && darts.length > 0 && turnResult.totalScore === 0) {
+          // Keep bust result as is
+        } else if (!finished) {
+          turnResult = { darts, totalScore: turnScore, finished: false };
+        }
+      } catch (err) {
+        // Fallback to local simulation
+        console.warn('Checkout data unavailable, using local turn simulation');
       }
     }
 
-    const mean = 40 + level * 4; // rough scaling 1-18 => 44..112
-    const spread = 45;
-    const rand = () => Math.random();
-    const noise = (rand() + rand() + rand()) / 3; // pseudo-normal 0-1
-    let attempt = Math.round(mean + (noise - 0.5) * spread);
-    if (attempt < 0) attempt = 0;
-    if (attempt > 180) attempt = 180;
-    if (needsDouble && attempt > botCurrent) attempt = botCurrent - (botCurrent % 2);
-    if (attempt < 0) attempt = 0;
-    return attempt;
+    return turnResult.totalScore;
   };
 
   useEffect(() => {
     if (winner) return;
     if (currentPlayer !== 'dartbot') return;
     setBotThinking(true);
-    const timer = setTimeout(() => {
-      const botThrow = generateBotThrow();
+    const timer = setTimeout(async () => {
+      const botThrow = await generateBotThrow();
       // For bot finishing throws in double out, assume it hits a double
       if (botThrow === botScore && outRule === 'double' && botThrow <= 170 && botThrow % 2 === 0) {
         setLastDartMultiplier(2);

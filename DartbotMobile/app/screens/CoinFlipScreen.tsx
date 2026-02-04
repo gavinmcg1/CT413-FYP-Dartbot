@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, StyleSheet, Animated, Platform } from 'react-native';
 import { Text, Button, useTheme } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -8,6 +8,11 @@ export default function CoinFlipScreen() {
   const theme = useTheme();
   const router = useRouter();
   const params = useLocalSearchParams();
+  const normalizeParam = (value?: string | string[]) => (Array.isArray(value) ? value[0] : value);
+  const normalizedParams = {
+    ...params,
+    level: normalizeParam(params.level) ?? normalizeParam(params.botLevel) ?? '10',
+  };
   
   const [isFlipping, setIsFlipping] = useState(false);
   const [result, setResult] = useState<'user' | 'dartbot' | null>(null);
@@ -41,12 +46,12 @@ export default function CoinFlipScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     // Navigate to game screen
     console.log('Starting game with:', {
-      ...params,
+      ...normalizedParams,
       firstPlayer: result,
     });
     router.push({
       pathname: '/screens/GameScreen',
-      params: { ...params, firstPlayer: result },
+      params: { ...normalizedParams, firstPlayer: result },
     });
   };
 
