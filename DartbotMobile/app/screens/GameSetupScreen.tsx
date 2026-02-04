@@ -52,7 +52,10 @@ export default function GameSetupScreen() {
 
   const handleStart = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    router.push('/screens/GameSettingsScreen');
+    router.push({
+      pathname: '/screens/GameSettingsScreen',
+      params: { level: level.toString() }
+    });
   };
 
   return (
