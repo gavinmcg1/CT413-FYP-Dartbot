@@ -14,7 +14,6 @@ const API_TIMEOUT = 10000; // Increased from 5s to 10s for multiple API calls pe
 interface CheckoutRecommendation {
   best?: {
     sequence: string;
-    success_prob: number;
     safety: number;
   };
   safest?: {
@@ -23,7 +22,6 @@ interface CheckoutRecommendation {
   };
   top_5?: Array<{
     sequence: string[] | string;
-    success_prob: number;
     safety: number;
     is_one_dart?: boolean;
   }>;

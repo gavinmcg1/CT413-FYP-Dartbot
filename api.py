@@ -119,8 +119,7 @@ def get_checkout_recommendation():
             'average_range': average_range,
             'recommendation': {
                 'best': {
-                    'sequence': best_sequence,
-                    'success_prob': 0.5
+                    'sequence': best_sequence
                 }
             }
         }), 200

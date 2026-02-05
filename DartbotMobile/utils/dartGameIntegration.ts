@@ -299,7 +299,13 @@ function sampleMissDestination(): Target | null {
  * For segment 20, use empirical data; otherwise use neighboring singles
  * Special handling for bulls (50 and 25) with skill-based probabilities for IBULL only
  */
-function sampleMissDestinationForSegment(segment: number, isBullTarget: boolean = false, isCheckoutSetup: boolean = false, skillLevel: number = 10): Target {
+function sampleMissDestinationForSegment(
+  segment: number,
+  isBullTarget: boolean = false,
+  isCheckoutSetup: boolean = false,
+  skillLevel: number = 10,
+  intendedMult: 'S' | 'D' | 'T' = 'S'
+): Target | null {
   // Special handling for bullseye targets with skill-based miss behavior
   if (isBullTarget) {
     // Calculate skill-based probabilities (scale from 1-18)
@@ -341,10 +347,32 @@ function sampleMissDestinationForSegment(segment: number, isBullTarget: boolean 
     return sampleMissDestination() ?? ('S20' as Target);
   }
 
+  // For double attempts (D1-D20), allow some misses outside the board (no score)
+  if (!isBullTarget && intendedMult === 'D') {
+    const skillFactor = (skillLevel - 1) / 17; // 0 to 1
+    // Level 4: 50/25/12.5/12.5, Level 18: 65/33/1/1
+    const outside = 0.50 + (0.15 * skillFactor);
+    const same = 0.25 + (0.08 * skillFactor);
+    const prev = 0.125 + (-0.115 * skillFactor);
+    const next = 0.125 + (-0.115 * skillFactor);
+
+    const roll = Math.random();
+    if (roll < outside) return null;
+    if (roll < outside + same) return `S${segment}` as Target;
+    if (roll < outside + same + prev) return `S${getPrevSegment(segment)}` as Target;
+    return `S${getNextSegment(segment)}` as Target;
+  }
+
   // For checkout setups or non-20 segments, always hit a valid segment (no bounceouts)
+  // Level 4: 60/20/20, Level 18: 98/1/1
+  const skillFactor = (skillLevel - 1) / 17; // 0 to 1
+  const same = 0.60 + (0.38 * skillFactor);
+  const prev = 0.20 + (-0.19 * skillFactor);
+  const next = 0.20 + (-0.19 * skillFactor);
+
   const roll = Math.random();
-  if (roll < 0.6) return `S${segment}` as Target;
-  if (roll < 0.8) return `S${getPrevSegment(segment)}` as Target;
+  if (roll < same) return `S${segment}` as Target;
+  if (roll < same + prev) return `S${getPrevSegment(segment)}` as Target;
   return `S${getNextSegment(segment)}` as Target;
 }
 
@@ -382,8 +410,9 @@ function simulateSingleDart(skillLevel: number, intended: Target, overrideHitCha
   // Miss - use empirical distribution for segment 20, otherwise neighbors
   const segmentMatch = intended.match(/^([SDT])(\d+)$/);
   const segment = segmentMatch ? parseInt(segmentMatch[2], 10) : 20;
+  const intendedMult = segmentMatch ? (segmentMatch[1] as 'S' | 'D' | 'T') : 'S';
   const isBullTarget = segment === 50 || segment === 25; // S50 = inner bull, S25 = outer bull
-  const missTarget = sampleMissDestinationForSegment(segment, isBullTarget, isCheckoutSetup, skillLevel);
+  const missTarget = sampleMissDestinationForSegment(segment, isBullTarget, isCheckoutSetup, skillLevel, intendedMult);
   const missScore = calculateScore(missTarget);
 
   return {
