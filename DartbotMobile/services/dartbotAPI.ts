@@ -9,12 +9,11 @@ import axios, { AxiosInstance } from 'axios';
 const IS_WEB = typeof window !== 'undefined';
 const WEB_HOST = IS_WEB ? window.location.hostname : 'localhost';
 const API_BASE_URL = IS_WEB ? `http://${WEB_HOST}:5000` : 'http://192.168.1.100:5000'; // Update as needed
-const API_TIMEOUT = 5000;
+const API_TIMEOUT = 10000; // Increased from 5s to 10s for multiple API calls per turn
 
 interface CheckoutRecommendation {
   best?: {
     sequence: string;
-    success_prob: number;
     safety: number;
   };
   safest?: {
@@ -23,7 +22,6 @@ interface CheckoutRecommendation {
   };
   top_5?: Array<{
     sequence: string[] | string;
-    success_prob: number;
     safety: number;
     is_one_dart?: boolean;
   }>;

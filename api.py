@@ -12,7 +12,17 @@ CORS(app)
 
 # Configuration
 FOLDER = os.path.dirname(os.path.abspath(__file__))
+CANDIDATES_JSON = os.path.join(FOLDER, 'checkout_candidates.json')
 OUTPUT_JSON = os.path.join(FOLDER, 'checkout_simulation_results.json')
+
+# Load checkout candidates (optimal routes for all scores)
+checkout_candidates = {}
+try:
+    with open(CANDIDATES_JSON, 'r', encoding='utf-8') as fh:
+        checkout_candidates = json.load(fh)
+    print(f"Loaded checkout candidates from {CANDIDATES_JSON}")
+except Exception as e:
+    print(f"Warning: Could not load checkout candidates: {e}")
 
 # Load precomputed results on startup
 checkout_data = {}
@@ -98,18 +108,36 @@ def get_checkout_recommendation():
     if not isinstance(score, int) or score < 2 or score > 170:
         return jsonify({'error': 'Score must be an integer between 2 and 170'}), 400
     
-    # Get recommendation from data
+    # First try to get from checkout candidates (optimal routes)
+    score_str = str(score)
+    if score_str in checkout_candidates:
+        candidates = checkout_candidates[score_str]
+        best_sequence = candidates[0] if candidates else None
+        print(f"[API] Found checkout candidate for {score}: {best_sequence}")
+        return jsonify({
+            'score': score,
+            'average_range': average_range,
+            'recommendation': {
+                'best': {
+                    'sequence': best_sequence
+                }
+            }
+        }), 200
+    
+    print(f"[API] No checkout candidate found for {score}, falling back to old format")
+    
+    # Fallback to old data format if available
     try:
         bins = checkout_data.get('bins', {})
         bin_data = bins.get(average_range, {})
-        score_str = str(score)
         
         if score_str not in bin_data:
+            print(f"[API] No bin data for {score} in range {average_range}")
             return jsonify({
                 'score': score,
                 'average_range': average_range,
                 'recommendation': None,
-                'message': f'No checkout data available for score {score} in range {average_range}'
+                'message': f'No checkout data available for score {score}'
             }), 200
         
         recommendation = bin_data[score_str]
@@ -118,8 +146,8 @@ def get_checkout_recommendation():
             'average_range': average_range,
             'recommendation': recommendation
         }), 200
-    
     except Exception as e:
+        print(f"[API] Error getting checkout recommendation: {e}")
         return jsonify({'error': str(e)}), 500
 
 

@@ -116,18 +116,38 @@ for label, low, high, rep in bins:
 
     bin_stats.append({'label': label, 'low': low, 'high': high, 'rep': rep, 'p_hit': p_hit, 'aimed': bin_aimed})
 
-# Fill empty bins by borrowing nearest populated bin and lowering slightly
-borrow_factor = 0.9
+# Fill empty bins by borrowing nearest populated bin
+# For bins higher than the borrowed bin's average: increase rate by 10%
+# For bins lower than the borrowed bin's average: decrease rate by 10%
+increase_factor = 1.1
+decrease_factor = 0.9
 for i, b in enumerate(bin_stats):
     if b['p_hit'] is None:
-        lower = next((bin_stats[j]['p_hit'] for j in range(i - 1, -1, -1) if bin_stats[j]['p_hit'] is not None), None)
-        higher = next((bin_stats[j]['p_hit'] for j in range(i + 1, len(bin_stats)) if bin_stats[j]['p_hit'] is not None), None)
-        if lower is not None:
-            b['p_hit'] = lower * borrow_factor
-        elif higher is not None:
-            b['p_hit'] = higher * borrow_factor
+        # Find nearest populated bin (checking lower first, then higher)
+        lower_idx = next((j for j in range(i - 1, -1, -1) if bin_stats[j]['p_hit'] is not None), None)
+        higher_idx = next((j for j in range(i + 1, len(bin_stats)) if bin_stats[j]['p_hit'] is not None), None)
+        
+        # Determine which is closer
+        if lower_idx is not None and higher_idx is not None:
+            dist_lower = i - lower_idx
+            dist_higher = higher_idx - i
+            source_idx = lower_idx if dist_lower <= dist_higher else higher_idx
+        elif lower_idx is not None:
+            source_idx = lower_idx
+        elif higher_idx is not None:
+            source_idx = higher_idx
         else:
-            b['p_hit'] = overall_p_hit * borrow_factor
+            b['p_hit'] = overall_p_hit
+            continue
+        
+        source_p_hit = bin_stats[source_idx]['p_hit']
+        source_rep = bin_stats[source_idx]['rep']
+        
+        # If current bin average is higher, increase the rate; if lower, decrease
+        if b['rep'] > source_rep:
+            b['p_hit'] = source_p_hit * increase_factor
+        else:
+            b['p_hit'] = source_p_hit * decrease_factor
 
 # Build results using finalized p_hit values
 for b in bin_stats:
