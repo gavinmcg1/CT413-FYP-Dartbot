@@ -110,28 +110,14 @@ function mapBedToTarget(bed: string): Target | null {
  * Uses empirical data from simulation results loaded via API
  */
 export function getT20HitProbability(skillLevel: number): number {
-  const bin = currentAverageRange ? simulationResults?.bins?.[currentAverageRange] : undefined;
-  const binProb = bin?.predicted_p_hit_per_dart;
-  const repAverage = bin?.rep_average;
-  const model = simulationResults?.model;
-
+  const binProb = currentAverageRange && simulationResults?.bins?.[currentAverageRange]?.predicted_p_hit_per_dart;
+  
   // Debug logging
-  console.log(`[T20HitProb] Level: ${skillLevel}, Range: ${currentAverageRange}, BinProb: ${binProb}, RepAvg: ${repAverage}, Model: ${model ? `${model.slope},${model.intercept}` : 'none'}, Bins: ${simulationResults?.bins ? Object.keys(simulationResults.bins) : 'none'}`);
-
+ // console.log(`[T20HitProb] Level: ${skillLevel}, Range: ${currentAverageRange}, BinProb: ${binProb}, Bins available: ${simulationResults?.bins ? Object.keys(simulationResults.bins) : 'none'}`);
+  
   if (typeof binProb === 'number') {
-    // If predicted bin values look unrealistic for low averages, fall back to model
-    if (model && typeof repAverage === 'number') {
-      const modelProb = model.slope * repAverage + model.intercept;
-      const modelClamped = Math.max(0.02, Math.min(0.98, modelProb));
-
-      if (repAverage <= 60 && binProb >= 0.4) {
-        console.warn(`[T20HitProb] BinProb looks too high for repAvg ${repAverage}. Using model: ${modelProb} → ${modelClamped}`);
-        return modelClamped;
-      }
-    }
-
     const clamped = Math.max(0.02, Math.min(0.98, binProb));
-    console.log(`[T20HitProb] Using API bin: ${binProb} → ${clamped}`);
+    //console.log(`[T20HitProb] Using API data: ${binProb} → ${clamped}`);
     return clamped;
   }
   
@@ -173,11 +159,34 @@ function getS20HitProbability(skillLevel: number): number {
  */
 function getTargetHitProbability(skillLevel: number, target: Target): number {
   if (target === 'S20') return getS20HitProbability(skillLevel);
+  
   const base = getT20HitProbability(skillLevel);
   const mult = target[0];
+  
+  // Special handling for bulls - they're smaller targets, harder to hit
+  // Skill-based scaling: worse players hit them less often
+  const skillFactor = (skillLevel - 1) / 17; // 0 to 1, where 1 is skill 18
+  
+  // S50 = inner bull (smallest, hardest)
+  // Skill 4: ~7%, Skill 18: ~33%
+  if (target === 'S50') {
+    const multiplier = 0.10 + (skillFactor * 0.31);
+    return Math.max(0.02, base * multiplier);
+  }
+  
+  // S25 = outer bull (larger than inner, but still small)
+  // Skill 4: ~12%, Skill 18: ~45%
+  if (target === 'S25') {
+    const multiplier = 0.20 + (skillFactor * 0.36);
+    return Math.max(0.02, base * multiplier);
+  }
+  
+  // Regular singles
   if (mult === 'S') return Math.min(0.98, base * 1.25);
+  // Doubles
   if (mult === 'D') return Math.max(0.02, base * 0.75);
-  return base; // Triple
+  // Triples
+  return base;
 }
 
 /**
@@ -288,12 +297,51 @@ function sampleMissDestination(): Target | null {
 /**
  * Sample a miss destination around a target segment
  * For segment 20, use empirical data; otherwise use neighboring singles
+ * Special handling for bulls (50 and 25) with skill-based probabilities for IBULL only
  */
-function sampleMissDestinationForSegment(segment: number): Target {
-  if (segment === 20) {
+function sampleMissDestinationForSegment(segment: number, isBullTarget: boolean = false, isCheckoutSetup: boolean = false, skillLevel: number = 10): Target {
+  // Special handling for bullseye targets with skill-based miss behavior
+  if (isBullTarget) {
+    // Calculate skill-based probabilities (scale from 1-18)
+    const skillFactor = (skillLevel - 1) / 17; // 0 to 1, where 1 is skill 18
+    
+    // Aiming for inner bull (50) - skill-based miss behavior
+    if (segment === 50) {
+      // Skill-based chance to hit outer bull on miss
+      // Skill 1: 15% chance to hit obull, Skill 18: 40% chance
+      const obullChance = 0.15 + (skillFactor * 0.25);
+      const missRoll = Math.random();
+      
+      if (missRoll < obullChance) {
+        // Hit outer bull instead
+        return 'S25' as Target;
+      } else {
+        // Random number 1-20
+        const randomSegment = Math.floor(Math.random() * 20) + 1;
+        return `S${randomSegment}` as Target;
+      }
+    }
+    
+    // Aiming for outer bull (25) - FIXED 5% chance for all skill levels
+    if (segment === 25) {
+      // Fixed 5% chance to hit inner bull on miss (all skill levels)
+      const missRoll = Math.random();
+      if (missRoll < 0.05) {
+        // Small chance to hit inner bull
+        return 'S50' as Target;
+      } else {
+        // Random number 1-20
+        const randomSegment = Math.floor(Math.random() * 20) + 1;
+        return `S${randomSegment}` as Target;
+      }
+    }
+  }
+  
+  if (segment === 20 && !isCheckoutSetup) {
     return sampleMissDestination() ?? ('S20' as Target);
   }
 
+  // For checkout setups or non-20 segments, always hit a valid segment (no bounceouts)
   const roll = Math.random();
   if (roll < 0.6) return `S${segment}` as Target;
   if (roll < 0.8) return `S${getPrevSegment(segment)}` as Target;
@@ -314,8 +362,11 @@ export interface BotDartThrow {
 /**
  * Simulate a single dart throw at T20
  */
-function simulateSingleDart(skillLevel: number, intended: Target): BotDartThrow {
-  const hitProb = getTargetHitProbability(skillLevel, intended);
+function simulateSingleDart(skillLevel: number, intended: Target, overrideHitChance?: number, isCheckoutSetup: boolean = false): BotDartThrow {
+  const resolvedHitProb = typeof overrideHitChance === 'number'
+    ? Math.max(0.0, Math.min(1.0, overrideHitChance))
+    : getTargetHitProbability(skillLevel, intended);
+  const hitProb = resolvedHitProb;
   const didHit = Math.random() < hitProb;
 
   if (didHit) {
@@ -331,7 +382,8 @@ function simulateSingleDart(skillLevel: number, intended: Target): BotDartThrow 
   // Miss - use empirical distribution for segment 20, otherwise neighbors
   const segmentMatch = intended.match(/^([SDT])(\d+)$/);
   const segment = segmentMatch ? parseInt(segmentMatch[2], 10) : 20;
-  const missTarget = sampleMissDestinationForSegment(segment);
+  const isBullTarget = segment === 50 || segment === 25; // S50 = inner bull, S25 = outer bull
+  const missTarget = sampleMissDestinationForSegment(segment, isBullTarget, isCheckoutSetup, skillLevel);
   const missScore = calculateScore(missTarget);
 
   return {
@@ -346,8 +398,8 @@ function simulateSingleDart(skillLevel: number, intended: Target): BotDartThrow 
 /**
  * Exported single-dart simulation for a specific intended target
  */
-export function simulateDartAtTarget(skillLevel: number, intended: Target): BotDartThrow {
-  return simulateSingleDart(skillLevel, intended);
+export function simulateDartAtTarget(skillLevel: number, intended: Target, overrideHitChance?: number, isCheckoutSetup: boolean = false): BotDartThrow {
+  return simulateSingleDart(skillLevel, intended, overrideHitChance, isCheckoutSetup);
 }
 
 /**
