@@ -7,6 +7,131 @@ import * as Haptics from 'expo-haptics';
 import { dartbotAPI } from '../../services/dartbotAPI';
 import { simulateBotTurn, simulateDartAtTarget, parseCheckoutTarget, getAverageRangeForLevel, getT20HitProbability, getBotCheckoutProbability, formatBotDarts, setSimulationResults, setAverageRangeForSimulation, applyIntendedHitVariance } from '../../utils/dartGameIntegration';
 
+/**
+ * Count the number of darts in a checkout sequence
+ * Sequences are comma-separated (e.g., "t20,t14,d11" has 3 darts)
+ */
+function countDartsInSequence(sequence: string): number {
+  if (!sequence || typeof sequence !== 'string') return 0;
+  return sequence.split(',').length;
+}
+
+/**
+ * Filter checkout candidates to only those that can be completed with remaining darts
+ * @param candidates - Array of checkout sequences (comma-separated)
+ * @param remainingDarts - Number of darts left in the turn (1-3)
+ * @returns Filtered candidates that can be completed with remaining darts
+ */
+function filterCandidatesByDarts(candidates: string[], remainingDarts: number): string[] {
+  if (!candidates || candidates.length === 0) return [];
+  return candidates.filter(seq => {
+    const dartCount = countDartsInSequence(seq);
+    return dartCount <= remainingDarts;
+  });
+}
+
+/**
+ * Single-dart finishable scores (doubles 2-40 and Bull)
+ */
+const SINGLE_DART_FINISHES = new Set([
+  2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 50
+]);
+
+/**
+ * Calculate fallback quality for a checkout route
+ * Higher score = better fallback (if treble is missed and becomes single)
+ */
+function calculateFallbackQuality(sequence: string, startingScore: number): number {
+  const targets = sequence.split(',');
+  if (targets.length < 2) return 0;
+  
+  const firstTarget = targets[0];
+  const match = firstTarget.match(/^([tdiobs])(\d+)/i);
+  if (!match) return 0;
+  
+  const [, prefix, valueStr] = match;
+  const value = parseInt(valueStr, 10);
+  
+  // Only calculate fallback for trebles
+  if (prefix.toLowerCase() !== 't') return 0;
+  
+  // If treble is missed, assume single is hit
+  const singleScore = value;
+  const fallbackRemaining = startingScore - singleScore;
+  
+  // Big bonus if fallback leaves a single-dart finish
+  if (SINGLE_DART_FINISHES.has(fallbackRemaining)) {
+    // Extra bonus for Bull (50) - easiest single finish
+    if (fallbackRemaining === 50) return 100;
+    // Good bonus for D20 (40) or D16 (32) - common finishes
+    if (fallbackRemaining === 40 || fallbackRemaining === 32) return 80;
+    // Standard bonus for other doubles
+    return 60;
+  }
+  
+  // Small bonus if fallback leaves a 2-dart finish
+  if (fallbackRemaining > 50 && fallbackRemaining <= 110) return 20;
+  
+  return 0;
+}
+
+/**
+ * Get the first valid checkout sequence from API recommendation
+ * Filters candidates by remaining darts and returns the best one
+ * SMART: When exactly 2 darts remain, re-ranks by fallback quality
+ * @param recommendation - API recommendation object
+ * @param remainingDarts - Number of darts left in the turn
+ * @param currentScore - Current score remaining (for fallback calculation)
+ * @returns First valid sequence string, or null if none available
+ */
+function getBestValidCheckoutSequence(
+  recommendation: any,
+  remainingDarts: number,
+  currentScore?: number
+): string | null {
+  if (!recommendation) return null;
+  
+  // Get all candidates from API response
+  const allCandidates = recommendation.all_candidates || [];
+  if (allCandidates.length > 0) {
+    // Filter candidates by dart count
+    let validCandidates = filterCandidatesByDarts(allCandidates, remainingDarts);
+    
+    // SMART SELECTION: When exactly 2 darts remain, re-rank by fallback quality
+    // This prioritizes routes where missing the treble still leaves a realistic finish
+    if (validCandidates.length > 1 && remainingDarts === 2 && currentScore) {
+      const candidatesWithQuality = validCandidates.map(seq => ({
+        sequence: seq,
+        quality: calculateFallbackQuality(seq, currentScore)
+      }));
+      
+      // Sort by fallback quality (descending), keeping original order as tiebreaker
+      candidatesWithQuality.sort((a, b) => b.quality - a.quality);
+      
+      validCandidates = candidatesWithQuality.map(c => c.sequence);
+      
+      // Log if we're changing the route due to fallback quality
+      if (candidatesWithQuality[0].quality > 0 && candidatesWithQuality[0].sequence !== allCandidates[0]) {
+        console.log(`[SMART CHECKOUT] 2 darts on ${currentScore}: Preferring ${candidatesWithQuality[0].sequence} over ${allCandidates[0]} (fallback quality: ${candidatesWithQuality[0].quality})`);
+      }
+    }
+    
+    if (validCandidates.length > 0) {
+      return validCandidates[0]; // Return best valid sequence
+    }
+  }
+  
+  // Fallback to best sequence if all_candidates not available
+  if (recommendation.best?.sequence) {
+    const dartCount = countDartsInSequence(recommendation.best.sequence);
+    if (dartCount <= remainingDarts) {
+      return recommendation.best.sequence;
+    }
+  }
+  
+  return null;
+}
+
 export default function GameScreen() {
   const theme = useTheme();
   const router = useRouter();
@@ -72,6 +197,7 @@ export default function GameScreen() {
   // Stats tracking
   const [userThrows, setUserThrows] = useState<number[]>([]);
   const [userBestLeg, setUserBestLeg] = useState<number>(0);
+  const [userWorstLeg, setUserWorstLeg] = useState<number>(0);
   const [userCheckoutDarts, setUserCheckoutDarts] = useState<number | null>(null);
   const [userCheckoutDoubles, setUserCheckoutDoubles] = useState<number | null>(null);
   const [doubleAttempts, setDoubleAttempts] = useState<number>(0);
@@ -80,6 +206,7 @@ export default function GameScreen() {
   // Bot stats tracking
   const [botThrows, setBotThrows] = useState<number[]>([]);
   const [botBestLeg, setBotBestLeg] = useState<number>(0);
+  const [botWorstLeg, setBotWorstLeg] = useState<number>(0);
   const [botCheckoutDarts, setBotCheckoutDarts] = useState<number | null>(null);
   const [botCheckoutDoubles, setBotCheckoutDoubles] = useState<number | null>(null);
   const [botDoubleAttempts, setBotDoubleAttempts] = useState<number>(0);
@@ -90,6 +217,10 @@ export default function GameScreen() {
   const [cumulativeCheckoutSuccess, setCumulativeCheckoutSuccess] = useState<number>(0);
   const [botCumulativeDoubleAttempts, setBotCumulativeDoubleAttempts] = useState<number>(0);
   const [botCumulativeCheckoutSuccess, setBotCumulativeCheckoutSuccess] = useState<number>(0);
+  
+  // Highest finish tracking
+  const [userHighestFinish, setUserHighestFinish] = useState<number>(0);
+  const [botHighestFinish, setBotHighestFinish] = useState<number>(0);
 
   // Double In stats
   const [hasHitDoubleIn, setHasHitDoubleIn] = useState<boolean>(false);
@@ -107,6 +238,7 @@ export default function GameScreen() {
     winner: Player | null;
     userThrows: number[];
     userBestLeg: number;
+    userWorstLeg: number;
     userCheckoutDarts: number | null;
     userCheckoutDoubles: number | null;
     doubleAttempts: number;
@@ -124,12 +256,15 @@ export default function GameScreen() {
     doubleInSuccess: number;
     botThrows: number[];
     botBestLeg: number;
+    botWorstLeg: number;
     botCheckoutDarts: number | null;
     botCheckoutDoubles: number | null;
     botDoubleAttempts: number;
     botCurrentLegStartIndex: number;
     botCumulativeDoubleAttempts: number;
     botCumulativeCheckoutSuccess: number;
+    userHighestFinish: number;
+    botHighestFinish: number;
   };
   const [history, setHistory] = useState<GameState[]>([]);
 
@@ -255,12 +390,24 @@ export default function GameScreen() {
       setWinner(null);
       setInputScore('0');
       setHasHitDoubleIn(false); // Reset double in for new leg
+      // Reset checkout stats for new leg
+      setUserCheckoutDarts(null);
+      setUserCheckoutDoubles(null);
+      setBotCheckoutDarts(null);
+      setBotCheckoutDoubles(null);
       // Alternate first player for next leg
       const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
       setCurrentPlayer(nextFirstPlayer);
       setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
-      setCurrentLegStartIndex(userThrows.length);
-      setBotCurrentLegStartIndex(botThrows.length);
+      // Use functional updates to get current array lengths (not stale closure values)
+      setUserThrows((current) => {
+        setCurrentLegStartIndex(current.length);
+        return current;
+      });
+      setBotThrows((current) => {
+        setBotCurrentLegStartIndex(current.length);
+        return current;
+      });
       return;
     }
 
@@ -292,12 +439,24 @@ export default function GameScreen() {
       setWinner(null);
       setInputScore('0');
       setHasHitDoubleIn(false); // Reset double in for new set
+      // Reset checkout stats for new leg
+      setUserCheckoutDarts(null);
+      setUserCheckoutDoubles(null);
+      setBotCheckoutDarts(null);
+      setBotCheckoutDoubles(null);
       // Alternate first player for next set
       const nextFirstPlayer = initialFirstPlayer === 'user' ? (newUserSetsWon % 2 === 0 ? 'user' : 'dartbot') : (newUserSetsWon % 2 === 0 ? 'dartbot' : 'user');
       setCurrentPlayer(nextFirstPlayer);
       setStatus(`Set ${newUserSetsWon + newBotSetsWon} won! Starting Leg 1 of Set ${newUserSetsWon + newBotSetsWon + 1}. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
-      setCurrentLegStartIndex(userThrows.length);
-      setBotCurrentLegStartIndex(botThrows.length);
+      // Use functional updates to get current array lengths (not stale closure values)
+      setUserThrows((current) => {
+        setCurrentLegStartIndex(current.length);
+        return current;
+      });
+      setBotThrows((current) => {
+        setBotCurrentLegStartIndex(current.length);
+        return current;
+      });
       return;
     }
 
@@ -310,13 +469,25 @@ export default function GameScreen() {
     setWinner(null);
     setInputScore('0');
     setHasHitDoubleIn(false); // Reset double in for new leg
+    // Reset checkout stats for new leg
+    setUserCheckoutDarts(null);
+    setUserCheckoutDoubles(null);
+    setBotCheckoutDarts(null);
+    setBotCheckoutDoubles(null);
     // Alternate first player for next leg - swap who threw first each leg
     const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
     setCurrentPlayer(nextFirstPlayer);
     setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
     // Mark where the next leg starts for per-leg calculations
-    setCurrentLegStartIndex(userThrows.length);
-    setBotCurrentLegStartIndex(botThrows.length);
+    // Use functional updates to get current array lengths (not stale closure values)
+    setUserThrows((current) => {
+      setCurrentLegStartIndex(current.length);
+      return current;
+    });
+    setBotThrows((current) => {
+      setBotCurrentLegStartIndex(current.length);
+      return current;
+    });
   };
 
   const applyThrow = (player: Player, throwScore: number, dartScores?: number[]) => {
@@ -336,6 +507,7 @@ export default function GameScreen() {
         winner,
         userThrows: [...userThrows],
         userBestLeg,
+        userWorstLeg,
         userCheckoutDarts,
         userCheckoutDoubles,
         doubleAttempts,
@@ -353,12 +525,15 @@ export default function GameScreen() {
         doubleInSuccess,
         botThrows: [...botThrows],
         botBestLeg,
+        botWorstLeg,
         botCheckoutDarts,
         botCheckoutDoubles,
         botDoubleAttempts,
         botCurrentLegStartIndex,
         botCumulativeDoubleAttempts,
         botCumulativeCheckoutSuccess,
+        userHighestFinish,
+        botHighestFinish,
       },
     ]);
 
@@ -441,11 +616,19 @@ export default function GameScreen() {
           setUserCheckoutDarts(dartsThrown);
           setUserCheckoutDoubles(0); // Not applicable for straight out
           setCumulativeCheckoutSuccess((prev) => prev + 1);
+          // Track highest finish
+          if (scoreBefore > userHighestFinish) {
+            setUserHighestFinish(scoreBefore);
+          }
           // Calculate best leg based on current throws + checkout darts
           setUserThrows((currentThrows) => {
-            const totalDartsThisLeg = Math.max(0, currentThrows.length - 1) * 3 + dartsThrown;
+            const currentLegThrowCount = currentThrows.length - currentLegStartIndex;
+            const totalDartsThisLeg = Math.max(0, currentLegThrowCount - 1) * 3 + dartsThrown;
             setUserBestLeg((prevBestLeg) => 
               prevBestLeg === 0 || totalDartsThisLeg < prevBestLeg ? totalDartsThisLeg : prevBestLeg
+            );
+            setUserWorstLeg((prevWorstLeg) => 
+              totalDartsThisLeg > prevWorstLeg ? totalDartsThisLeg : prevWorstLeg
             );
             return currentThrows;
           });
@@ -465,11 +648,19 @@ export default function GameScreen() {
             setDoubleAttempts((prev) => prev + 1);
             setCumulativeDoubleAttempts((prev) => prev + 1);
             setCumulativeCheckoutSuccess((prev) => prev + 1);
+            // Track highest finish
+            if (scoreBefore > userHighestFinish) {
+              setUserHighestFinish(scoreBefore);
+            }
             // Calculate best leg based on current throws + checkout darts
             setUserThrows((currentThrows) => {
-              const totalDartsThisLeg = Math.max(0, currentThrows.length - 1) * 3 + 3;
+              const currentLegThrowCount = currentThrows.length - currentLegStartIndex;
+              const totalDartsThisLeg = Math.max(0, currentLegThrowCount - 1) * 3 + 3;
               setUserBestLeg((prevBestLeg) => 
                 prevBestLeg === 0 || totalDartsThisLeg < prevBestLeg ? totalDartsThisLeg : prevBestLeg
+              );
+              setUserWorstLeg((prevWorstLeg) => 
+                totalDartsThisLeg > prevWorstLeg ? totalDartsThisLeg : prevWorstLeg
               );
               return currentThrows;
             });
@@ -487,19 +678,31 @@ export default function GameScreen() {
       } else {
         // Bot finished
         setBotScore(0);
-        // Add the finishing throw to bot throws
-        const newBotThrows = [...botThrows, throwScore];
-        setBotThrows(newBotThrows);
-        
-        // Calculate best leg based on the new throws
-        const totalDartsThisLeg = Math.max(0, newBotThrows.length - 1) * 3 + 3;
-        if (botBestLeg === 0 || totalDartsThisLeg < botBestLeg) {
-          setBotBestLeg(totalDartsThisLeg);
-        }
+        // Add the finishing throw to bot throws using functional setState to get current state
+        setBotThrows((prev) => {
+          const newBotThrows = [...prev, throwScore];
+          
+          // Calculate best leg based on the current leg throws only
+          const currentLegThrowCount = newBotThrows.length - botCurrentLegStartIndex;
+          const totalDartsThisLeg = Math.max(0, currentLegThrowCount - 1) * 3 + 3;
+          if (botBestLeg === 0 || totalDartsThisLeg < botBestLeg) {
+            setBotBestLeg(totalDartsThisLeg);
+          }
+          if (totalDartsThisLeg > botWorstLeg) {
+            setBotWorstLeg(totalDartsThisLeg);
+          }
+          
+          return newBotThrows;
+        });
         
         setBotCheckoutDarts(3);
         setBotCheckoutDoubles(1);
-        setCumulativeCheckoutSuccess((prev) => prev + 1);
+        // Note: Attempts are tracked in generateBotThrow when aiming at doubles
+        setBotCumulativeCheckoutSuccess((prev) => prev + 1);
+        // Track highest finish
+        if (throwScore > botHighestFinish) {
+          setBotHighestFinish(throwScore);
+        }
         setLastDartMultiplier(1); // Reset for next leg
         setWinner(player);
         setStatus(`Dartbot wins this leg!`);
@@ -567,6 +770,7 @@ export default function GameScreen() {
       setWinner(targetState.winner);
       setUserThrows(targetState.userThrows);
       setUserBestLeg(targetState.userBestLeg);
+      setUserWorstLeg(targetState.userWorstLeg);
       setUserCheckoutDarts(targetState.userCheckoutDarts);
       setUserCheckoutDoubles(targetState.userCheckoutDoubles);
       setDoubleAttempts(targetState.doubleAttempts);
@@ -584,12 +788,15 @@ export default function GameScreen() {
       setDoubleInSuccess(targetState.doubleInSuccess);
       setBotThrows(targetState.botThrows);
       setBotBestLeg(targetState.botBestLeg);
+      setBotWorstLeg(targetState.botWorstLeg);
       setBotCheckoutDarts(targetState.botCheckoutDarts);
       setBotCheckoutDoubles(targetState.botCheckoutDoubles);
       setBotDoubleAttempts(targetState.botDoubleAttempts);
       setBotCurrentLegStartIndex(targetState.botCurrentLegStartIndex);
       setBotCumulativeDoubleAttempts(targetState.botCumulativeDoubleAttempts);
       setBotCumulativeCheckoutSuccess(targetState.botCumulativeCheckoutSuccess);
+      setUserHighestFinish(targetState.userHighestFinish);
+      setBotHighestFinish(targetState.botHighestFinish);
       
       return prev.slice(0, -statesToUndo);
     });
@@ -629,12 +836,19 @@ export default function GameScreen() {
         setCumulativeDoubleAttempts((prev) => prev + doubles);
         setCumulativeCheckoutSuccess((prev) => prev + 1);
       }
+      // Track highest finish
+      if (checkoutScore > userHighestFinish) {
+        setUserHighestFinish(checkoutScore);
+      }
       
       // Calculate stats and set winner
-      const turns = userThrows.length;
-      const totalDartsThisLeg = Math.max(0, turns - 1) * 3 + (Number.isNaN(darts) ? 0 : darts);
+      const currentLegThrowCount = userThrows.length - currentLegStartIndex;
+      const totalDartsThisLeg = Math.max(0, currentLegThrowCount - 1) * 3 + (Number.isNaN(darts) ? 0 : darts);
       if (userBestLeg === 0 || totalDartsThisLeg < userBestLeg) {
         setUserBestLeg(totalDartsThisLeg);
+      }
+      if (totalDartsThisLeg > userWorstLeg) {
+        setUserWorstLeg(totalDartsThisLeg);
       }
       
       setWinner('user');
@@ -715,10 +929,10 @@ export default function GameScreen() {
     const matchTotal = allThrows.reduce((a, b) => a + b, 0);
     const threeDartAvg = dartsInMatch > 0 ? ((matchTotal / dartsInMatch) * 3).toFixed(2) : 0;
     
-    // 9DA is first 3 turns of entire match
+    // 9DA is first 3 turns (9 darts) from the entire match (cumulative, not per-leg)
     const first3 = allThrows.slice(0, 3);
     const first3Total = first3.reduce((a, b) => a + b, 0);
-    const first9Avg = first3.length === 3 ? ((first3Total / 9) * 3).toFixed(2) : 0;
+    const first9Avg = first3.length === 3 ? ((first3Total / 9) * 3).toFixed(2) : '0';
 
     // Use cumulative stats for checkout rate across the entire match
     const checkoutAttempts = cumulativeDoubleAttempts || 0;
@@ -728,9 +942,17 @@ export default function GameScreen() {
     // Get current leg throws for lastScore and current leg darts
     const currentLegThrows = userThrows.slice(currentLegStartIndex);
     const currentLegTurns = currentLegThrows.length;
-    const dartsInCurrentLeg = userCheckoutDarts
-      ? Math.max(0, currentLegTurns - 1) * 3 + userCheckoutDarts
-      : currentLegTurns * 3;
+    // Calculate darts thrown in current leg only
+    const dartsInCurrentLeg = (() => {
+      // No throws yet in this leg - always return 0 (ignore stale checkout data)
+      if (currentLegTurns === 0) return 0;
+      // Leg finished with a checkout (only count checkout darts if score is actually 0)
+      if (userScore === 0 && userCheckoutDarts && currentLegTurns > 0) {
+        return Math.max(0, currentLegTurns - 1) * 3 + userCheckoutDarts;
+      }
+      // Leg in progress - only count if we have throws in this leg
+      return currentLegTurns > 0 ? currentLegTurns * 3 : 0;
+    })();
     
     return {
       threeDartAvg: parseFloat(threeDartAvg as string) || 0,
@@ -741,7 +963,7 @@ export default function GameScreen() {
       lastScore: currentLegThrows[currentLegThrows.length - 1] || 0,
       dartsThrown: dartsInCurrentLeg,
     };
-  }, [userThrows, userCheckoutDarts, userCheckoutDoubles, cumulativeDoubleAttempts, cumulativeCheckoutSuccess, currentLegStartIndex]);
+  }, [userThrows, userCheckoutDarts, userCheckoutDoubles, cumulativeDoubleAttempts, cumulativeCheckoutSuccess, currentLegStartIndex, userScore]);
 
   const botStats = useMemo(() => {
     if (botThrows.length === 0) {
@@ -767,10 +989,10 @@ export default function GameScreen() {
     const matchTotal = allThrows.reduce((a, b) => a + b, 0);
     const threeDartAvg = dartsInMatch > 0 ? ((matchTotal / dartsInMatch) * 3).toFixed(2) : 0;
     
-    // 9DA is first 3 turns of entire match
+    // 9DA is first 3 turns (9 darts) from the entire match (cumulative, not per-leg)
     const first3 = allThrows.slice(0, 3);
     const first3Total = first3.reduce((a, b) => a + b, 0);
-    const first9Avg = first3.length === 3 ? ((first3Total / 9) * 3).toFixed(2) : 0;
+    const first9Avg = first3.length === 3 ? ((first3Total / 9) * 3).toFixed(2) : '0';
 
     // Use cumulative stats for checkout rate across the entire match
     const checkoutAttempts = botCumulativeDoubleAttempts || 0;
@@ -780,9 +1002,17 @@ export default function GameScreen() {
     // Get current leg throws for lastScore and current leg darts
     const currentLegThrows = botThrows.slice(botCurrentLegStartIndex);
     const currentLegTurns = currentLegThrows.length;
-    const dartsInCurrentLeg = botCheckoutDarts
-      ? Math.max(0, currentLegTurns - 1) * 3 + botCheckoutDarts
-      : currentLegTurns * 3;
+    // Calculate darts thrown in current leg only
+    const dartsInCurrentLeg = (() => {
+      // No throws yet in this leg - always return 0 (ignore stale checkout data)
+      if (currentLegTurns === 0) return 0;
+      // Leg finished with a checkout (only count checkout darts if score is actually 0)
+      if (botScore === 0 && botCheckoutDarts && currentLegTurns > 0) {
+        return Math.max(0, currentLegTurns - 1) * 3 + botCheckoutDarts;
+      }
+      // Leg in progress - only count if we have throws in this leg
+      return currentLegTurns > 0 ? currentLegTurns * 3 : 0;
+    })();
     
     return {
       threeDartAvg: parseFloat(threeDartAvg as string) || 0,
@@ -793,7 +1023,7 @@ export default function GameScreen() {
       lastScore: currentLegThrows[currentLegThrows.length - 1] || 0,
       dartsThrown: dartsInCurrentLeg,
     };
-  }, [botThrows, botCheckoutDarts, botCheckoutDoubles, botCumulativeDoubleAttempts, botCumulativeCheckoutSuccess, botCurrentLegStartIndex]);
+  }, [botThrows, botCheckoutDarts, botCheckoutDoubles, botCumulativeDoubleAttempts, botCumulativeCheckoutSuccess, botCurrentLegStartIndex, botScore]);
 
   const generateBotThrow = async (): Promise<{totalScore: number; dartScores: number[]}> => {
     // Use new probability-based engine
@@ -842,30 +1072,8 @@ export default function GameScreen() {
         let doublesAttempted = 0;
         let doublesHit = 0;
         let checkoutSequence: string[] = [];
-
-        // Fetch optimal checkout sequence from API
-        try {
-          const recommendation = await dartbotAPI.getCheckoutRecommendation(remainingScore, averageRange);
-          console.log(`[BOT] API Response for ${remainingScore}:`, JSON.stringify(recommendation));
-          const sequence = recommendation?.best?.sequence;
-          // Parse sequence: could be array or comma-separated string
-          if (Array.isArray(sequence)) {
-            checkoutSequence = sequence;
-            console.log(`[BOT] Parsed array sequence: ${checkoutSequence.join(',')}`);
-          } else if (typeof sequence === 'string') {
-            checkoutSequence = sequence.split(',');
-            console.log(`[BOT] Parsed string sequence: ${checkoutSequence.join(',')}`);
-          } else {
-            console.log(`[BOT] No valid sequence returned, sequence was:`, sequence);
-          }
-          if (checkoutSequence.length > 0) {
-            console.log(`[BOT] Using checkout sequence: ${checkoutSequence.join(',')}`);
-          } else {
-            console.log(`[BOT] Checkout sequence is empty, will use T20 fallback`);
-          }
-        } catch (err) {
-          console.warn('Checkout API error:', err, 'will attempt to finish naturally');
-        }
+        let sequenceIndex = 0; // Track position in the checkout sequence
+        let followingSequence = false; // Whether we're actively following a sequence
 
         const getCheckoutSingleHitChance = (skill: number) => {
           const min = 0.33;
@@ -879,6 +1087,7 @@ export default function GameScreen() {
         for (let i = 0; i < 3; i++) {
           const scoreLeft = remainingScore - turnScore;
           let targetToken: string;
+          let isFromSequence = false; // Track if target came from a checkout sequence
 
           // Check if we can finish with one dart
           const canFinishWithOneDart = () => {
@@ -903,41 +1112,66 @@ export default function GameScreen() {
           if (oneDartFinish) {
             // Can finish with one dart - aim directly for it!
             targetToken = oneDartFinish;
+            isFromSequence = true; // One-dart finishes are calculated, not random fallback
             console.log(`[BOT] Can finish ${scoreLeft} with one dart! Aiming at ${targetToken}`);
-          } else {
-            // ALWAYS recalculate checkout sequence for current remaining score
-            // This ensures we have the optimal route for whatever score we're at
+          } else if (followingSequence && sequenceIndex < checkoutSequence.length) {
+            // Continue following the original checkout sequence
+            targetToken = checkoutSequence[sequenceIndex];
+            isFromSequence = true;
+            console.log(`[BOT] Following sequence (dart ${sequenceIndex + 1}/${checkoutSequence.length}): ${targetToken} from [${checkoutSequence.join(',')}]`);
+          } else if (scoreLeft < 170) {
+            // Only call API for checkout if remaining score is below 170 (in checkout_candidates.json)
+            const remainingDartsInTurn = 3 - i; // If i=0, we have 3 darts; if i=1, we have 2 darts; if i=2, we have 1 dart
             try {
               const recommendation = await dartbotAPI.getCheckoutRecommendation(scoreLeft, averageRange);
               if (!recommendation) {
                 console.warn(`[BOT] No recommendation returned for ${scoreLeft}, will use T20`);
                 targetToken = 't20';
+                isFromSequence = false;
               } else {
-                console.log(`[BOT] Getting optimal checkout for ${scoreLeft}:`, JSON.stringify(recommendation));
-                const sequence = recommendation?.best?.sequence;
-                if (Array.isArray(sequence) && sequence.length > 0) {
-                  targetToken = sequence[0];
-                  console.log(`[BOT] Optimal sequence for ${scoreLeft}: ${sequence.join(',')}, using first dart: ${targetToken}`);
-                } else if (typeof sequence === 'string') {
-                  const parts = sequence.split(',');
-                  targetToken = parts[0] ?? 't20'; // Use first dart from optimal sequence
-                  console.log(`[BOT] Optimal sequence for ${scoreLeft}: ${sequence}, using first dart: ${targetToken}`);
+                // Get the best sequence that fits the remaining darts
+                const bestSequence = getBestValidCheckoutSequence(recommendation, remainingDartsInTurn, scoreLeft);
+                if (bestSequence) {
+                  const parts = bestSequence.split(',');
+                  targetToken = parts[0] ?? 't20';
+                  isFromSequence = true;
+                  console.log(`[BOT] Optimal sequence for ${scoreLeft} with ${remainingDartsInTurn} darts: ${bestSequence}, using first dart: ${targetToken}`);
                 } else {
-                  console.warn(`[BOT] Invalid sequence format for ${scoreLeft}`);
-                  targetToken = 't20';
+                  // No valid sequence with remaining darts - still use best sequence's first target
+                  const allCandidates = recommendation.all_candidates || [];
+                  const bestSeq = allCandidates[0] ?? recommendation.best?.sequence;
+                  if (bestSeq) {
+                    const parts = bestSeq.split(',');
+                    targetToken = parts[0] ?? 't20';
+                    isFromSequence = true;
+                    console.warn(`[BOT] No sequence fits ${remainingDartsInTurn} darts for ${scoreLeft}, using best sequence's first target: ${targetToken} (from ${bestSeq})`);
+                  } else {
+                    console.warn(`[BOT] No checkout recommendation found for ${scoreLeft}, using fallback T20`);
+                    targetToken = 't20';
+                    isFromSequence = false;
+                  }
                 }
               }
             } catch (err) {
               console.warn(`[BOT] Failed to get checkout for ${scoreLeft}:`, err);
-              targetToken = 't20'; // Fall back to T20
+              targetToken = 't20';
+              isFromSequence = false;
             }
+          } else {
+            // Score is 170 or above - no API data available, just aim T20
+            console.log(`[BOT] Score ${scoreLeft} >= 170, no checkout sequence available, aiming T20`);
+            targetToken = 't20';
+            isFromSequence = false;
           }
 
           const intended = parseCheckoutTarget(targetToken);
-          const shouldApplyVariance = !(outRule === 'double' && scoreLeft <= 60);
-          const intendedWithVariance = shouldApplyVariance
-            ? applyIntendedHitVariance(intended, level, scoreLeft)
-            : intended;
+          // IMPORTANT: Do NOT apply variance to checkout sequence targets - use them exactly as specified
+          // Only apply variance to genuine T20 fallbacks
+          const intendedWithVariance = isFromSequence ? intended : (
+            !(outRule === 'double' && scoreLeft <= 60)
+              ? applyIntendedHitVariance(intended, level, scoreLeft)
+              : intended
+          );
 
           const isCheckoutSingle = intendedWithVariance[0] === 'S' && scoreLeft <= 60;
           const checkoutSingleHitChance = isCheckoutSingle
@@ -954,8 +1188,15 @@ export default function GameScreen() {
             doublesAttempted++;
           }
 
-          const dart = simulateDartAtTarget(level, intendedWithVariance, checkoutSingleHitChance, isCheckoutSingle);
+          // Pass previous dart for "following the marker" bonus
+          const previousDart = i > 0 ? darts[i - 1] : null;
+          const dart = simulateDartAtTarget(level, intendedWithVariance, checkoutSingleHitChance, isCheckoutSingle, previousDart);
           darts.push(dart);
+          
+          // Log marker bonus if applied
+          if (dart.markerBonus && dart.markerBonus > 0) {
+            console.log(`[BOT] Marker bonus: +${(dart.markerBonus * 100).toFixed(1)}% hit chance (following previous dart)`);
+          }
           
           console.log(`[BOT] Dart ${i + 1}: Hit=${dart.actual}, Score=${dart.score}, Success=${dart.actualHit ? '✓' : '✗'}`);
           
@@ -966,6 +1207,19 @@ export default function GameScreen() {
 
           const newTurnScore = turnScore + dart.score;
           console.log(`[BOT] Turn total so far: ${turnScore} + ${dart.score} = ${newTurnScore}, Remaining would be: ${remainingScore - newTurnScore}`);
+          
+          // Update sequence tracking: advance if we hit the intended target, otherwise stop following
+          if (followingSequence) {
+            if (dart.actualHit) {
+              // Successfully hit the intended target, advance to next in sequence
+              sequenceIndex++;
+              console.log(`[BOT] Advanced sequence to dart ${sequenceIndex + 1}/${checkoutSequence.length}`);
+            } else {
+              // Missed the intended target, abandon sequence and recalculate on next dart
+              followingSequence = false;
+              console.log(`[BOT] Missed target, abandoning sequence for recalculation`);
+            }
+          }
           
           if (newTurnScore > remainingScore) {
             console.log(`[BOT] BUST! Scored ${newTurnScore} > ${remainingScore}`);
@@ -978,8 +1232,10 @@ export default function GameScreen() {
 
           if (newTurnScore === remainingScore) {
             if (outRule === 'double') {
+              // Check if finished on double or bullseye (inner bull = 50 = D25)
               const isDouble = dart.actual && dart.actual[0] === 'D';
-              if (!isDouble) {
+              const isBullseye = dart.score === 50; // Inner bull (50) counts as double
+              if (!isDouble && !isBullseye) {
                 console.log(`[BOT] Failed to finish on double! Turn score=${newTurnScore}`);
                 turnResult = { darts, totalScore: 0, finished: false };
                 resultAlreadySet = true;
@@ -1000,18 +1256,11 @@ export default function GameScreen() {
           }
         }
         
-        // Update bot double stats based on actual darts thrown at finishing doubles
+        // Track double attempts (every time bot aims at a finishing double)
         if (doublesAttempted > 0) {
           setBotCumulativeDoubleAttempts((prev) => prev + doublesAttempted);
         }
-        
-        // Only count as success if bot actually finished on a double
-        if (finished && turnResult.totalScore === remainingScore && outRule === 'double') {
-          const lastDart = darts[darts.length - 1];
-          if (lastDart && lastDart.actual && lastDart.actual[0] === 'D') {
-            setBotCumulativeCheckoutSuccess((prev) => prev + 1);
-          }
-        }
+        // Note: Success is tracked in applyThrow when bot actually finishes
 
         // Set final turn result if not already set by break statements
         if (!resultAlreadySet && !finished && turnScore > 0) {
@@ -1172,7 +1421,7 @@ export default function GameScreen() {
             </Text>
           </View>
           <View style={[styles.scoreCard, { backgroundColor: theme.colors.surfaceVariant, borderColor: currentPlayer === 'dartbot' ? theme.colors.primary : theme.colors.outline }]}>
-            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>Dartbot</Text>
+            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>Dartbot ({level})</Text>
             <Text variant="headlineMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 2 }}>
               {botScore}
             </Text>
@@ -1606,10 +1855,10 @@ export default function GameScreen() {
                 {outRule === 'double' ? 'DOUBLE OUT' : 'STRAIGHT OUT'}
               </Text>
               <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 4 }}>
-                Sets: You {userSetsWon} - {botSetsWon} Dartbot
+                Sets: You {userSetsWon} - {botSetsWon} Dartbot ({level})
               </Text>
               <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 2 }}>
-                Current: Set {userSetsWon + botSetsWon + 1}, Leg {currentLegNumber} • Legs: You {userLegsWon} - {botLegsWon} Dartbot
+                Current: Set {userSetsWon + botSetsWon + 1}, Leg {currentLegNumber} • Legs: You {userLegsWon} - {botLegsWon} Dartbot ({level})
               </Text>
             </View>
 
@@ -1619,7 +1868,7 @@ export default function GameScreen() {
               <View style={styles.statsRow}>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>You</Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}> </Text>
-                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot ({level})</Text>
               </View>
 
               {/* 3-dart average */}
@@ -1660,9 +1909,9 @@ export default function GameScreen() {
 
               {/* Highest finish */}
               <View style={[styles.statsRow, styles.statsRowAlt]}>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userCheckoutDarts && userCheckoutDarts > 0 ? startingScore - userScore : '-'}</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userHighestFinish > 0 ? userHighestFinish : '-'}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Highest finish</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botCheckoutDarts && botCheckoutDarts > 0 ? startingScore - botScore : '-'}</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botHighestFinish > 0 ? botHighestFinish : '-'}</Text>
               </View>
 
               {/* Highest score */}
@@ -1681,9 +1930,9 @@ export default function GameScreen() {
 
               {/* Worst leg */}
               <View style={styles.statsRow}>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{userWorstLeg > 0 ? `${userWorstLeg} DARTS` : '-'}</Text>
                 <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Worst leg</Text>
-                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botWorstLeg > 0 ? `${botWorstLeg} DARTS` : '-'}</Text>
               </View>
 
               {/* Darts Thrown This Leg */}
@@ -1709,7 +1958,7 @@ export default function GameScreen() {
               <View style={styles.statsRow}>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>User</Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Score Range</Text>
-                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot ({level})</Text>
               </View>
 
               {(() => {
@@ -1795,7 +2044,7 @@ export default function GameScreen() {
               <View style={styles.statsRow}>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>You</Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}> </Text>
-                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot ({level})</Text>
               </View>
 
               {/* 3-dart average */}
