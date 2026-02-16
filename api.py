@@ -85,6 +85,85 @@ def get_simulation_results():
         return jsonify({'error': str(e)}), 500
 
 
+def calculate_sequence_value(sequence: str) -> int:
+    """
+    Calculate the actual dart score value for a checkout sequence.
+    Sequences are comma-separated targets like "t20,t14,d11" or "o16,t16,d20".
+    Returns the sum of all dart values, or -1 if sequence is invalid.
+    
+    Target notation:
+    - t<num>: Triple (3x segment value)
+    - d<num>: Double (2x segment value)  
+    - s<num>: Single (1x segment value)
+    - o<num>: Outer Bull (25 points) - "outer bull"
+    - i<num>: Inner Bull (50 points) - "inner bull", but treated as 25 here
+    - ibull: Inner Bull (50 points)
+    - obull: Outer Bull (25 points)
+    """
+    if not sequence or not isinstance(sequence, str):
+        return -1
+    
+    total = 0
+    targets = sequence.split(',')
+    
+    for target in targets:
+        target = target.strip().lower()
+        
+        # Handle special bull cases
+        if target == 'ibull':
+            total += 50
+            continue
+        elif target == 'obull':
+            total += 25
+            continue
+        
+        # Parse standard notation: multiplier(t/d/s) + segment (o/i means 25/50 for non-standard)
+        if len(target) < 2:
+            return -1
+        
+        mult_char = target[0]
+        rest = target[1:]
+        
+        # Handle 'o' and 'i' as segment parts (obull/ibull already handled)
+        if mult_char == 'o':
+            # Outer segment/bull variant (rare, but means 25)
+            try:
+                segment = int(rest)
+                total += 25
+            except:
+                return -1
+            continue
+        elif mult_char == 'i':
+            # Inner segment/bull variant (rare, but means 50)
+            try:
+                segment = int(rest)
+                total += 50
+            except:
+                return -1
+            continue
+        
+        # Standard multiplier notation
+        multiplier = 1
+        if mult_char == 't':
+            multiplier = 3
+        elif mult_char == 'd':
+            multiplier = 2
+        elif mult_char == 's':
+            multiplier = 1
+        else:
+            return -1
+        
+        try:
+            segment = int(rest)
+            if segment < 1 or segment > 20:
+                return -1
+            total += multiplier * segment
+        except:
+            return -1
+    
+    return total
+
+
 @app.route('/api/checkout/recommend', methods=['POST'])
 def get_checkout_recommendation():
     """
@@ -113,14 +192,15 @@ def get_checkout_recommendation():
     if score_str in checkout_candidates:
         candidates = checkout_candidates[score_str]
         best_sequence = candidates[0] if candidates else None
-        print(f"[API] Found checkout candidate for {score}: {best_sequence}")
+        print(f"[API] Found {len(candidates)} checkout candidates for {score}, best={best_sequence}")
         return jsonify({
             'score': score,
             'average_range': average_range,
             'recommendation': {
                 'best': {
                     'sequence': best_sequence
-                }
+                },
+                'all_candidates': candidates
             }
         }), 200
     

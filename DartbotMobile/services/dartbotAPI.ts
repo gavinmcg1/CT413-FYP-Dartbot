@@ -16,6 +16,7 @@ interface CheckoutRecommendation {
     sequence: string;
     safety: number;
   };
+  all_candidates?: string[];
   safest?: {
     sequence: string;
     safety: number;

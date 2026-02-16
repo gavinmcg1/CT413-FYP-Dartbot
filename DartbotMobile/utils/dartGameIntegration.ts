@@ -106,61 +106,89 @@ function mapBedToTarget(bed: string): Target | null {
 }
 
 /**
- * Get hit probability for T20 based on skill level
- * Uses empirical data from simulation results loaded via API
+ * Get base hit probability for T20 from API (without skill scaling)
+ * This is used as the reference for calculating other target probabilities
  */
-export function getT20HitProbability(skillLevel: number): number {
+function getT20BaseHitProbability(): number {
   const binProb = currentAverageRange && simulationResults?.bins?.[currentAverageRange]?.predicted_p_hit_per_dart;
   
-  // Debug logging
- // console.log(`[T20HitProb] Level: ${skillLevel}, Range: ${currentAverageRange}, BinProb: ${binProb}, Bins available: ${simulationResults?.bins ? Object.keys(simulationResults.bins) : 'none'}`);
-  
   if (typeof binProb === 'number') {
-    const clamped = Math.max(0.02, Math.min(0.98, binProb));
-    //console.log(`[T20HitProb] Using API data: ${binProb} → ${clamped}`);
-    return clamped;
+    return Math.max(0.02, Math.min(0.98, binProb));
   }
   
-  // Fallback if simulation data not loaded yet - should rarely happen
   console.warn('[T20HitProb] Simulation data not available, using fallback probability');
   return 0.5; // Default 50% hit rate as fallback
 }
 
 /**
+ * Get hit probability for T20 based on skill level
+ * Uses empirical data from simulation results loaded via API
+ * Applies skill-based scaling: low skill significantly reduced, high skill kept/increased
+ * NOTE: Only T20 gets this scaling. Other targets use the unscaled base.
+ */
+export function getT20HitProbability(skillLevel: number): number {
+  const baseProb = getT20BaseHitProbability();
+  
+  // Apply skill-based scaling to the API probability
+  // Low skill (1-8): significantly reduced accuracy for consistency
+  // High skill (14-18): kept at API level or slightly boosted
+  const skillFactor = (skillLevel - 1) / 17; // 0 to 1
+  
+  // Non-linear skill curve that heavily penalizes low skill
+  // Skill 1: ~40% of API probability
+  // Skill 5: ~55% of API probability
+  // Skill 9: ~75% of API probability
+  // Skill 14: ~90% of API probability
+  // Skill 18: ~105% of API probability
+  const skillMultiplier = 0.40 + (skillFactor * 0.65);
+  
+  const scaledProb = baseProb * skillMultiplier;
+  return Math.max(0.02, Math.min(0.98, scaledProb));
+}
+
+/**
  * Get hit probability for S20 based on skill level
  * L1 around 10-15%, L18 around 95%
+ * Reduced for lower levels to prevent over-scoring
  */
 function getS20HitProbability(skillLevel: number): number {
   const s20HitByLevel: Record<number, number> = {
-    1: 0.12,
-    2: 0.14,
-    3: 0.16,
-    4: 0.20,
-    5: 0.26,
-    6: 0.32,
-    7: 0.38,
-    8: 0.45,
-    9: 0.52,
-    10: 0.60,
-    11: 0.68,
-    12: 0.74,
-    13: 0.80,
-    14: 0.85,
-    15: 0.89,
-    16: 0.92,
+    1: 0.10,
+    2: 0.12,
+    3: 0.14,
+    4: 0.16,
+    5: 0.22,
+    6: 0.28,
+    7: 0.35,
+    8: 0.42,
+    9: 0.50,
+    10: 0.58,
+    11: 0.66,
+    12: 0.73,
+    13: 0.79,
+    14: 0.84,
+    15: 0.88,
+    16: 0.91,
     17: 0.94,
     18: 0.95,
   };
-  return s20HitByLevel[skillLevel] ?? 0.60;
+  return s20HitByLevel[skillLevel] ?? 0.58;
 }
 
 /**
  * Get hit probability for a specific target based on skill and multiplier
+ * Low-skill: frequent T20 misses, struggle with doubles, hit singles often
+ * High-skill: consistent T20 hits, excellent doubles, singles are misses
+ * 
+ * NOTE: Uses BASE (unscaled) API probability for calculating multipliers,
+ * but T20 itself uses the skill-scaled probability
  */
 function getTargetHitProbability(skillLevel: number, target: Target): number {
   if (target === 'S20') return getS20HitProbability(skillLevel);
   
-  const base = getT20HitProbability(skillLevel);
+  // Use the UNSCALED base API probability for calculating other targets
+  // This prevents double-reduction where skill penalty applies twice
+  const base = getT20BaseHitProbability();
   const mult = target[0];
   
   // Special handling for bulls - they're smaller targets, harder to hit
@@ -168,23 +196,34 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
   const skillFactor = (skillLevel - 1) / 17; // 0 to 1, where 1 is skill 18
   
   // S50 = inner bull (smallest, hardest)
-  // Skill 4: ~7%, Skill 18: ~33%
+  // Uses a skill-scaled multiplier on the T20 base:
+  //   skill 4 → ~15% of base, skill 18 → ~41% of base
   if (target === 'S50') {
     const multiplier = 0.10 + (skillFactor * 0.31);
     return Math.max(0.02, base * multiplier);
   }
   
   // S25 = outer bull (larger than inner, but still small)
-  // Skill 4: ~12%, Skill 18: ~45%
+  // Uses a skill-scaled multiplier on the T20 base:
+  //   skill 4 → ~26% of base, skill 18 → ~56% of base
   if (target === 'S25') {
     const multiplier = 0.20 + (skillFactor * 0.36);
     return Math.max(0.02, base * multiplier);
   }
   
-  // Regular singles
-  if (mult === 'S') return Math.min(0.98, base * 1.25);
-  // Doubles
-  if (mult === 'D') return Math.max(0.02, base * 0.75);
+  // Regular singles: Low-skill players hit singles more often (less accurate at T20)
+  // High-skill players are more consistent at T20, singles are "misses"
+  // Low skill: 1.25x, High skill: 0.95x
+  const singleMultiplier = 1.25 - (skillFactor * 0.30);
+  if (mult === 'S') return Math.min(0.98, base * singleMultiplier);
+  
+  // Doubles: High-skill players are MUCH BETTER at doubles
+  // Doubles require precision and are the skill differentiator at checkout
+  // Applied to UNSCALED base so high-skill gets full advantage
+  // Low skill: 0.30x (terrible at doubles), High skill: 1.45x (excellent at doubles)
+  const doubleMultiplier = 0.30 + (skillFactor * 1.15);
+  if (mult === 'D') return Math.max(0.02, base * doubleMultiplier);
+  
   // Triples
   return base;
 }
@@ -270,16 +309,49 @@ export function applyIntendedHitVariance(
 
 /**
  * Sample a miss destination from empirical distribution
+ * High-skill players miss closer to T20 (filter out far misses)
  */
-function getMissDistribution(): Record<string, number> {
+function getMissDistribution(skillLevel: number = 10): Record<string, number> {
   const binDist = currentAverageRange && simulationResults?.bins?.[currentAverageRange]?.miss_bed_distribution;
-  if (binDist) return binDist as Record<string, number>;
-  if (simulationResults?.empirical_miss_dist) return simulationResults.empirical_miss_dist;
-  return DEFAULT_EMPIRICAL_MISS_DIST;
+  const baseDist = binDist || simulationResults?.empirical_miss_dist || DEFAULT_EMPIRICAL_MISS_DIST;
+  
+  // For high-skill players, filter out far misses (1's, low segments)
+  // Keep close misses (i20, o20, t5, o5, i5, t1, i1)
+  const skillFactor = (skillLevel - 1) / 17; // 0 to 1
+  
+  if (skillFactor < 0.5) {
+    // Low skill: use full distribution
+    return baseDist as Record<string, number>;
+  }
+  
+  // High skill: filter and renormalize
+  const closeSegments = ['i20', 'o20', 't5', 'o5', 'i5', 't1', 'i1', 'o1', 'bounceout'];
+  const filtered: Record<string, number> = {};
+  let total = 0;
+  
+  for (const [bed, prob] of Object.entries(baseDist)) {
+    const probNum = prob as number;
+    if (closeSegments.includes(bed)) {
+      filtered[bed] = probNum;
+      total += probNum;
+    } else {
+      // Include with decreasing probability as skill increases
+      const keepProb = 1 - skillFactor;
+      filtered[bed] = probNum * keepProb;
+      total += probNum * keepProb;
+    }
+  }
+  
+  // Renormalize
+  for (const bed in filtered) {
+    filtered[bed] /= total;
+  }
+  
+  return filtered;
 }
 
-function sampleMissDestination(): Target | null {
-  const missDist = getMissDistribution();
+function sampleMissDestination(skillLevel: number = 10): Target | null {
+  const missDist = getMissDistribution(skillLevel);
   const random = Math.random();
   let cumulative = 0;
 
@@ -328,7 +400,7 @@ function sampleMissDestinationForSegment(
       }
     }
     
-    // Aiming for outer bull (25) - FIXED 5% chance for all skill levels
+    // When missing outer bull (25), fixed 5% chance to hit inner bull instead (all skill levels)"
     if (segment === 25) {
       // Fixed 5% chance to hit inner bull on miss (all skill levels)
       const missRoll = Math.random();
@@ -344,7 +416,7 @@ function sampleMissDestinationForSegment(
   }
   
   if (segment === 20 && !isCheckoutSetup) {
-    return sampleMissDestination() ?? ('S20' as Target);
+    return sampleMissDestination(skillLevel) ?? ('S20' as Target);
   }
 
   // For double attempts (D1-D20), allow some misses outside the board (no score)
@@ -385,16 +457,75 @@ export interface BotDartThrow {
   score: number;
   hitProbability: number;
   actualHit: boolean;
+  markerBonus?: number; // Bonus applied from following a marker
 }
 
 /**
- * Simulate a single dart throw at T20
+ * Calculate marker bonus for following your dart
+ * Returns a multiplier (e.g., 1.0 = no bonus, 1.3 = 30% increase)
+ * 
+ * Two scenarios:
+ * 1. Aiming at double, previous missed completely off board (0 points) → bonus for having a visual marker
+ * 2. Aiming at T20, previous hit T20 → bonus for grouping/clustering effect
  */
-function simulateSingleDart(skillLevel: number, intended: Target, overrideHitChance?: number, isCheckoutSetup: boolean = false): BotDartThrow {
+function calculateMarkerBonus(
+  intended: Target,
+  previousDart: BotDartThrow | null,
+  skillLevel: number
+): number {
+  if (!previousDart) return 1.0; // First dart, no bonus
+  
+  const intendedMult = intended[0];
+  const intendedSegment = parseInt(intended.slice(1), 10);
+  
+  // Scenario 1: Aiming at double, previous missed completely off board (0 points)
+  // Visual marker to aim at - real darts phenomenon
+  if (intendedMult === 'D' && previousDart.intended[0] === 'D') {
+    // Check if previous dart missed the board completely (actual === null, score = 0)
+    // This gives a visual marker (the dart sticking in the wall/floor) to aim from
+    if (previousDart.actual === null && previousDart.score === 0) {
+      // Skill-based bonus: L4: +15%, L10: +25%, L18: +40%
+      const skillFactor = (skillLevel - 1) / 17; // 0 to 1
+      const bonusMultiplier = 1.15 + (skillFactor * 0.25);
+      return bonusMultiplier;
+    }
+  }
+  
+  // Scenario 2: Aiming at T20, previous hit T20 → clustering/grouping effect
+  // Confidence boost and muscle memory from successful hit
+  if (intended === 'T20' && previousDart.intended === 'T20') {
+    // Check if previous actually hit T20
+    if (previousDart.actual === 'T20' && previousDart.actualHit) {
+      // Skill-based bonus: L4: +10%, L10: +18%, L18: +30%
+      const skillFactor = (skillLevel - 1) / 17; // 0 to 1
+      const bonusMultiplier = 1.10 + (skillFactor * 0.20);
+      return bonusMultiplier;
+    }
+  }
+  
+  return 1.0; // No bonus
+}
+
+/**
+ * Simulate a single dart throw at a target
+ * Supports "following the marker" bonus from previous dart
+ */
+function simulateSingleDart(
+  skillLevel: number,
+  intended: Target,
+  overrideHitChance?: number,
+  isCheckoutSetup: boolean = false,
+  previousDart: BotDartThrow | null = null
+): BotDartThrow {
   const resolvedHitProb = typeof overrideHitChance === 'number'
     ? Math.max(0.0, Math.min(1.0, overrideHitChance))
     : getTargetHitProbability(skillLevel, intended);
-  const hitProb = resolvedHitProb;
+  
+  // Apply marker bonus from following previous dart
+  const markerMultiplier = calculateMarkerBonus(intended, previousDart, skillLevel);
+  const hitProb = Math.min(0.98, resolvedHitProb * markerMultiplier);
+  const markerBonus = markerMultiplier > 1.0 ? (markerMultiplier - 1.0) : 0;
+  
   const didHit = Math.random() < hitProb;
 
   if (didHit) {
@@ -404,6 +535,7 @@ function simulateSingleDart(skillLevel: number, intended: Target, overrideHitCha
       score: calculateScore(intended),
       hitProbability: hitProb,
       actualHit: true,
+      markerBonus,
     };
   }
 
@@ -421,14 +553,22 @@ function simulateSingleDart(skillLevel: number, intended: Target, overrideHitCha
     score: missScore,
     hitProbability: hitProb,
     actualHit: false,
+    markerBonus,
   };
 }
 
 /**
  * Exported single-dart simulation for a specific intended target
+ * Supports "following the marker" bonus from previous dart in the turn
  */
-export function simulateDartAtTarget(skillLevel: number, intended: Target, overrideHitChance?: number, isCheckoutSetup: boolean = false): BotDartThrow {
-  return simulateSingleDart(skillLevel, intended, overrideHitChance, isCheckoutSetup);
+export function simulateDartAtTarget(
+  skillLevel: number,
+  intended: Target,
+  overrideHitChance?: number,
+  isCheckoutSetup: boolean = false,
+  previousDart: BotDartThrow | null = null
+): BotDartThrow {
+  return simulateSingleDart(skillLevel, intended, overrideHitChance, isCheckoutSetup, previousDart);
 }
 
 /**
@@ -467,7 +607,8 @@ export function simulateBotTurn(
   for (let i = 0; i < 3; i++) {
     const baseTarget = 'T20' as Target;
     const intendedTarget = applyIntendedHitVariance(baseTarget, skillLevel, remainingScore);
-    const dart = simulateSingleDart(skillLevel, intendedTarget);
+    const previousDart = i > 0 ? darts[i - 1] : null;
+    const dart = simulateSingleDart(skillLevel, intendedTarget, undefined, false, previousDart);
     darts.push(dart);
 
     const newTurnScore = turnScore + dart.score;
@@ -544,7 +685,8 @@ export function simulateCheckoutTurn(
 
   for (let i = 0; i < 3; i++) {
     const intended = parseCheckoutTarget(seq[i] ?? 't20');
-    const dart = simulateSingleDart(skillLevel, intended);
+    const previousDart = i > 0 ? darts[i - 1] : null;
+    const dart = simulateSingleDart(skillLevel, intended, undefined, false, previousDart);
     darts.push(dart);
 
     const newTurnScore = turnScore + dart.score;
