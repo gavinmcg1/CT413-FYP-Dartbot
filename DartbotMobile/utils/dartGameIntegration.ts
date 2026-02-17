@@ -44,8 +44,22 @@ type SimulationResultsData = {
   empirical_miss_dist?: Record<string, number>;
 };
 
+type DoubleOutcomeEntry = {
+  hit_double?: number;
+  miss_inside?: number;
+  miss_outside?: number;
+  neighbor_singledouble?: number;
+  other?: number;
+  samples?: number;
+};
+
+type DoubleOutcomesData = {
+  bins?: Record<string, Record<string, DoubleOutcomeEntry>>;
+};
+
 let simulationResults: SimulationResultsData | null = null;
 let currentAverageRange: string | null = null;
+let doubleOutcomesResults: DoubleOutcomesData | null = null;
 
 export function setSimulationResults(data: SimulationResultsData | null, averageRange?: string) {
   simulationResults = data;
@@ -54,6 +68,24 @@ export function setSimulationResults(data: SimulationResultsData | null, average
 
 export function setAverageRangeForSimulation(averageRange: string) {
   currentAverageRange = averageRange;
+}
+
+export function setDoubleOutcomesResults(data: DoubleOutcomesData | null) {
+  doubleOutcomesResults = data;
+}
+
+function getDoubleOutcomeForSegment(segment: number): DoubleOutcomeEntry | null {
+  if (!currentAverageRange || !doubleOutcomesResults?.bins) return null;
+  const binData = doubleOutcomesResults.bins[currentAverageRange];
+  if (!binData) return null;
+  return binData[`d${segment}`] ?? null;
+}
+
+function getInnerBullOutcome(): DoubleOutcomeEntry | null {
+  if (!currentAverageRange || !doubleOutcomesResults?.bins) return null;
+  const binData = doubleOutcomesResults.bins[currentAverageRange];
+  if (!binData) return null;
+  return binData.ibull ?? null;
 }
 
 /**
@@ -196,19 +228,25 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
   const skillFactor = (skillLevel - 1) / 17; // 0 to 1, where 1 is skill 18
   
   // S50 = inner bull (smallest, hardest)
-  // Uses a skill-scaled multiplier on the T20 base:
-  //   skill 4 → ~15% of base, skill 18 → ~41% of base
+  // Prefer bin-specific empirical probability from double_outcomes (ibull)
   if (target === 'S50') {
-    const multiplier = 0.10 + (skillFactor * 0.31);
-    return Math.max(0.02, base * multiplier);
+    const innerBullOutcome = getInnerBullOutcome();
+    if (innerBullOutcome && typeof innerBullOutcome.hit_double === 'number') {
+      return Math.max(0.01, Math.min(0.35, innerBullOutcome.hit_double));
+    }
+
+    // Fallback curve if ibull data is unavailable
+    // Skill 1 ≈ 1.5%, Skill 10 ≈ 7.6%, Skill 18 ≈ 13.0%
+    const s50Probability = 0.015 + (skillFactor * 0.115);
+    return Math.max(0.01, Math.min(0.13, s50Probability));
   }
   
   // S25 = outer bull (larger than inner, but still small)
-  // Uses a skill-scaled multiplier on the T20 base:
-  //   skill 4 → ~26% of base, skill 18 → ~56% of base
+  // Keep lower than standard singles, but higher than inner bull.
+  // Skill 1 ≈ 6%, Skill 10 ≈ 14.5%, Skill 18 ≈ 22%
   if (target === 'S25') {
-    const multiplier = 0.20 + (skillFactor * 0.36);
-    return Math.max(0.02, base * multiplier);
+    const s25Probability = 0.06 + (skillFactor * 0.16);
+    return Math.max(0.03, Math.min(0.22, s25Probability));
   }
   
   // Regular singles: Low-skill players hit singles more often (less accurate at T20)
@@ -221,8 +259,26 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
   // Doubles require precision and are the skill differentiator at checkout
   // Applied to UNSCALED base so high-skill gets full advantage
   // Low skill: 0.30x (terrible at doubles), High skill: 1.45x (excellent at doubles)
-  const doubleMultiplier = 0.30 + (skillFactor * 1.15);
-  if (mult === 'D') return Math.max(0.02, base * doubleMultiplier);
+  if (mult === 'D') {
+    const lowLevelDoublePenaltyByLevel: Record<number, number> = {
+      1: 0.70,
+      2: 0.75,
+      3: 0.80,
+      4: 0.85,
+      5: 0.90,
+      6: 0.95,
+    };
+    const lowLevelPenalty = lowLevelDoublePenaltyByLevel[skillLevel] ?? 1.0;
+
+    const segment = parseInt(target.slice(1), 10);
+    const doubleOutcome = Number.isFinite(segment) ? getDoubleOutcomeForSegment(segment) : null;
+    if (doubleOutcome && typeof doubleOutcome.hit_double === 'number') {
+      return Math.max(0.02, Math.min(0.98, doubleOutcome.hit_double * lowLevelPenalty));
+    }
+
+    const doubleMultiplier = 0.30 + (skillFactor * 1.15);
+    return Math.max(0.02, base * doubleMultiplier * lowLevelPenalty);
+  }
   
   // Triples
   return base;
@@ -230,29 +286,30 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
 
 /**
  * Get variance probability by skill level
- * Non-linear distribution: L1=2%, L3=4%, L16=36%, L18=40%
- * Reflects that even elite players make deliberate adjustments
+ * Non-linear distribution with higher low-skill variance and tighter high-skill aiming:
+ * L1=12%, L3=18%, L10=22%, L16=8%, L18=4%
+ * Elite players mostly stick to intended targets.
  */
 function getVarianceProbabilityForLevel(skillLevel: number): number {
   const varianceByLevel: Record<number, number> = {
-    1: 0.02,   // 2%
-    2: 0.025,  // 2.5%
-    3: 0.04,   // 4%
-    4: 0.05,   // 5%
-    5: 0.07,   // 7%
-    6: 0.09,   // 9%
-    7: 0.12,   // 12%
-    8: 0.14,   // 14%
-    9: 0.17,   // 17%
-    10: 0.20,  // 20%
-    11: 0.24,  // 24%
-    12: 0.27,  // 27%
-    13: 0.30,  // 30%
-    14: 0.32,  // 32%
-    15: 0.34,  // 34%
-    16: 0.36,  // 36%
-    17: 0.38,  // 38%
-    18: 0.40,  // 40%
+    1: 0.12,   // 12%
+    2: 0.15,   // 15%
+    3: 0.18,   // 18%
+    4: 0.20,   // 20%
+    5: 0.22,   // 22%
+    6: 0.24,   // 24%
+    7: 0.25,   // 25%
+    8: 0.25,   // 25%
+    9: 0.24,   // 24%
+    10: 0.22,  // 22%
+    11: 0.18,  // 18%
+    12: 0.16,  // 16%
+    13: 0.14,  // 14%
+    14: 0.12,  // 12%
+    15: 0.10,  // 10%
+    16: 0.08,  // 8%
+    17: 0.06,  // 6%
+    18: 0.04,  // 4%
   };
   return varianceByLevel[skillLevel] ?? 0.20; // Default fallback
 }
@@ -323,23 +380,40 @@ function getMissDistribution(skillLevel: number = 10): Record<string, number> {
     // Low skill: use full distribution
     return baseDist as Record<string, number>;
   }
-  
-  // High skill: filter and renormalize
-  const closeSegments = ['i20', 'o20', 't5', 'o5', 'i5', 't1', 'i1', 'o1', 'bounceout'];
+
+  // High skill: reweight and renormalize
+  // At top levels, misses should cluster around 20 and only rarely drift to neighboring singles.
+  const core20Beds = new Set(['i20', 'o20', 'd20', 'm20']);
+  const neighborTripleBeds = new Set(['t5', 't1']);
+  const neighborSingleBeds = new Set(['i5', 'o5', 'i1', 'o1']);
+  const bounceBeds = new Set(['bounceout']);
   const filtered: Record<string, number> = {};
   let total = 0;
   
   for (const [bed, prob] of Object.entries(baseDist)) {
     const probNum = prob as number;
-    if (closeSegments.includes(bed)) {
-      filtered[bed] = probNum;
-      total += probNum;
+    let weight = 1;
+
+    if (core20Beds.has(bed)) {
+      // Boost center-20 misses as skill rises
+      weight = 1 + (1.2 * skillFactor);
+    } else if (neighborTripleBeds.has(bed)) {
+      // Keep some near-neighbor triples
+      weight = 0.45 - (0.15 * skillFactor);
+    } else if (neighborSingleBeds.has(bed)) {
+      // Strongly suppress neighboring singles at high levels
+      // L18 ~18% of original weight
+      weight = 0.55 - (0.37 * skillFactor);
+    } else if (bounceBeds.has(bed)) {
+      weight = 0.18 - (0.08 * skillFactor);
     } else {
-      // Include with decreasing probability as skill increases
-      const keepProb = 1 - skillFactor;
-      filtered[bed] = probNum * keepProb;
-      total += probNum * keepProb;
+      // Far misses decay steeply with skill
+      weight = 0.40 - (0.35 * skillFactor);
     }
+
+    const adjusted = probNum * Math.max(0.01, weight);
+    filtered[bed] = adjusted;
+    total += adjusted;
   }
   
   // Renormalize
@@ -385,6 +459,23 @@ function sampleMissDestinationForSegment(
     
     // Aiming for inner bull (50) - skill-based miss behavior
     if (segment === 50) {
+      const innerBullOutcome = getInnerBullOutcome();
+      if (innerBullOutcome) {
+        const inside = Math.max(0, innerBullOutcome.miss_inside ?? 0);
+        const outside = Math.max(0, innerBullOutcome.miss_outside ?? 0);
+        const neighbor = Math.max(0, innerBullOutcome.neighbor_singledouble ?? 0);
+        const other = Math.max(0, innerBullOutcome.other ?? 0);
+        const total = inside + outside + neighbor + other;
+
+        if (total > 0) {
+          const roll = Math.random() * total;
+          if (roll < inside) return 'S25' as Target;
+          if (roll < inside + outside) return null;
+          const randomSegment = Math.floor(Math.random() * 20) + 1;
+          return `S${randomSegment}` as Target;
+        }
+      }
+
       // Skill-based chance to hit outer bull on miss
       // Skill 1: 15% chance to hit obull, Skill 18: 40% chance
       const obullChance = 0.15 + (skillFactor * 0.25);
@@ -421,17 +512,58 @@ function sampleMissDestinationForSegment(
 
   // For double attempts (D1-D20), allow some misses outside the board (no score)
   if (!isBullTarget && intendedMult === 'D') {
-    const skillFactor = (skillLevel - 1) / 17; // 0 to 1
-    // Level 4: 50/25/12.5/12.5, Level 18: 65/33/1/1
-    const outside = 0.50 + (0.15 * skillFactor);
-    const same = 0.25 + (0.08 * skillFactor);
-    const prev = 0.125 + (-0.115 * skillFactor);
-    const next = 0.125 + (-0.115 * skillFactor);
+    const doubleOutcome = getDoubleOutcomeForSegment(segment);
+    if (doubleOutcome) {
+      const outside = Math.max(0, doubleOutcome.miss_outside ?? 0);
+      const same = Math.max(0, doubleOutcome.miss_inside ?? 0);
+      const neighbor = Math.max(0, doubleOutcome.neighbor_singledouble ?? 0);
+      const other = Math.max(0, doubleOutcome.other ?? 0);
+      const total = outside + same + neighbor + other;
+
+      if (total > 0) {
+        const roll = Math.random() * total;
+        if (roll < outside) return null;
+        if (roll < outside + same) return `S${segment}` as Target;
+        if (roll < outside + same + neighbor) {
+          return Math.random() < 0.5
+            ? (`S${getPrevSegment(segment)}` as Target)
+            : (`S${getNextSegment(segment)}` as Target);
+        }
+        const randomSegment = Math.floor(Math.random() * 20) + 1;
+        return `S${randomSegment}` as Target;
+      }
+    }
+
+    // Interpolate across level 1 to 18, anchored at:
+    // Level 4: 60/30/5/5 and Level 18: 65/33/1/1
+    const clampedLevel = Math.max(1, Math.min(18, skillLevel));
+    const t = (clampedLevel - 1) / 17; // 0 at L1, 1 at L18
+    const outside = 0.5892857143 + (0.0607142857 * t);
+    const same = 0.2935714286 + (0.0364285714 * t);
+    const prev = 0.0585714286 + (-0.0485714286 * t);
+    const next = 0.0585714286 + (-0.0485714286 * t);
 
     const roll = Math.random();
     if (roll < outside) return null;
     if (roll < outside + same) return `S${segment}` as Target;
     if (roll < outside + same + prev) return `S${getPrevSegment(segment)}` as Target;
+    return `S${getNextSegment(segment)}` as Target;
+  }
+
+  // For low-level triple attempts in checkout routes (e.g., T18/T17 setups),
+  // make neighboring singles more likely than same-segment single.
+  if (!isBullTarget && intendedMult === 'T' && skillLevel <= 4) {
+    const lowLevelTripleMissProfile: Record<number, { same: number; prev: number; next: number }> = {
+      1: { same: 0.42, prev: 0.29, next: 0.29 },
+      2: { same: 0.46, prev: 0.27, next: 0.27 },
+      3: { same: 0.50, prev: 0.25, next: 0.25 },
+      4: { same: 0.54, prev: 0.23, next: 0.23 },
+    };
+
+    const profile = lowLevelTripleMissProfile[skillLevel] ?? lowLevelTripleMissProfile[4];
+    const roll = Math.random();
+    if (roll < profile.same) return `S${segment}` as Target;
+    if (roll < profile.same + profile.prev) return `S${getPrevSegment(segment)}` as Target;
     return `S${getNextSegment(segment)}` as Target;
   }
 

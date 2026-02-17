@@ -5,7 +5,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useNavigation } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { dartbotAPI } from '../../services/dartbotAPI';
-import { simulateBotTurn, simulateDartAtTarget, parseCheckoutTarget, getAverageRangeForLevel, getT20HitProbability, getBotCheckoutProbability, formatBotDarts, setSimulationResults, setAverageRangeForSimulation, applyIntendedHitVariance } from '../../utils/dartGameIntegration';
+import { simulateBotTurn, simulateDartAtTarget, parseCheckoutTarget, getAverageRangeForLevel, getT20HitProbability, getBotCheckoutProbability, formatBotDarts, setSimulationResults, setAverageRangeForSimulation, setDoubleOutcomesResults, applyIntendedHitVariance } from '../../utils/dartGameIntegration';
 
 /**
  * Count the number of darts in a checkout sequence
@@ -97,9 +97,16 @@ function getBestValidCheckoutSequence(
     // Filter candidates by dart count
     let validCandidates = filterCandidatesByDarts(allCandidates, remainingDarts);
     
-    // SMART SELECTION: When exactly 2 darts remain, re-rank by fallback quality
-    // This prioritizes routes where missing the treble still leaves a realistic finish
-    if (validCandidates.length > 1 && remainingDarts === 2 && currentScore) {
+    // SMART SELECTION: Only for specific 2-dart scores where treble-first fallback matters
+    // - 61 to 70 (single leaves useful doubles/bull options)
+    // - 101, 104, 107, 110 (special prompt scores)
+    const smartFallbackScores = new Set([101, 104, 107, 110]);
+    const shouldRerankByFallback =
+      remainingDarts === 2 &&
+      typeof currentScore === 'number' &&
+      ((currentScore >= 61 && currentScore <= 70) || smartFallbackScores.has(currentScore));
+
+    if (validCandidates.length > 1 && shouldRerankByFallback) {
       const candidatesWithQuality = validCandidates.map(seq => ({
         sequence: seq,
         quality: calculateFallbackQuality(seq, currentScore)
@@ -165,9 +172,13 @@ export default function GameScreen() {
     let isActive = true;
     const averageRange = getAverageRangeForLevel(level);
     setAverageRangeForSimulation(averageRange);
-    dartbotAPI.getSimulationResults().then((data) => {
+    Promise.all([
+      dartbotAPI.getSimulationResults(),
+      dartbotAPI.getDoubleOutcomes(),
+    ]).then(([simulationData, doubleOutcomesData]) => {
       if (!isActive) return;
-      setSimulationResults(data, averageRange);
+      setSimulationResults(simulationData, averageRange);
+      setDoubleOutcomesResults(doubleOutcomesData);
     });
     return () => {
       isActive = false;
@@ -677,6 +688,7 @@ export default function GameScreen() {
         }
       } else {
         // Bot finished
+        const botCheckoutDartsUsed = dartScores && dartScores.length > 0 ? dartScores.length : 3;
         setBotScore(0);
         // Add the finishing throw to bot throws using functional setState to get current state
         setBotThrows((prev) => {
@@ -684,7 +696,7 @@ export default function GameScreen() {
           
           // Calculate best leg based on the current leg throws only
           const currentLegThrowCount = newBotThrows.length - botCurrentLegStartIndex;
-          const totalDartsThisLeg = Math.max(0, currentLegThrowCount - 1) * 3 + 3;
+          const totalDartsThisLeg = Math.max(0, currentLegThrowCount - 1) * 3 + botCheckoutDartsUsed;
           if (botBestLeg === 0 || totalDartsThisLeg < botBestLeg) {
             setBotBestLeg(totalDartsThisLeg);
           }
@@ -695,7 +707,7 @@ export default function GameScreen() {
           return newBotThrows;
         });
         
-        setBotCheckoutDarts(3);
+        setBotCheckoutDarts(botCheckoutDartsUsed);
         setBotCheckoutDoubles(1);
         // Note: Attempts are tracked in generateBotThrow when aiming at doubles
         setBotCumulativeCheckoutSuccess((prev) => prev + 1);
@@ -1075,12 +1087,6 @@ export default function GameScreen() {
         let sequenceIndex = 0; // Track position in the checkout sequence
         let followingSequence = false; // Whether we're actively following a sequence
 
-        const getCheckoutSingleHitChance = (skill: number) => {
-          const min = 0.33;
-          const max = 0.98;
-          return Math.max(min, Math.min(max, min + ((skill - 1) / 17) * (max - min)));
-        };
-
         console.log(`[BOT] Starting turn at ${remainingScore}`);
 
         let resultAlreadySet = false;
@@ -1108,6 +1114,8 @@ export default function GameScreen() {
             return null;
           };
 
+          console.log(`[BOT] Score check: scoreLeft=${scoreLeft}, checking routing...`);
+          
           const oneDartFinish = canFinishWithOneDart();
           if (oneDartFinish) {
             // Can finish with one dart - aim directly for it!
@@ -1119,8 +1127,9 @@ export default function GameScreen() {
             targetToken = checkoutSequence[sequenceIndex];
             isFromSequence = true;
             console.log(`[BOT] Following sequence (dart ${sequenceIndex + 1}/${checkoutSequence.length}): ${targetToken} from [${checkoutSequence.join(',')}]`);
-          } else if (scoreLeft < 170) {
-            // Only call API for checkout if remaining score is below 170 (in checkout_candidates.json)
+          } else if (scoreLeft <= 170) {
+            console.log(`[BOT] Route: scoreLeft <= 170, calling checkout API...`);
+            // Call API for checkout if remaining score is 170 or below (in checkout_candidates.json)
             const remainingDartsInTurn = 3 - i; // If i=0, we have 3 darts; if i=1, we have 2 darts; if i=2, we have 1 dart
             try {
               const recommendation = await dartbotAPI.getCheckoutRecommendation(scoreLeft, averageRange);
@@ -1158,10 +1167,28 @@ export default function GameScreen() {
               isFromSequence = false;
             }
           } else {
-            // Score is 170 or above - no API data available, just aim T20
-            console.log(`[BOT] Score ${scoreLeft} >= 170, no checkout sequence available, aiming T20`);
-            targetToken = 't20';
-            isFromSequence = false;
+            // Score > 170: Use approach play to find best starting segment
+            // Approach play identifies segments that leave better finishing positions
+            console.log(`[BOT] Route: scoreLeft > 170 (${scoreLeft}), calling approach play API...`);
+            try {
+              const approachSuggestion = await dartbotAPI.getApproachSuggestion(scoreLeft, outRule);
+              console.log(`[BOT] API response:`, approachSuggestion);
+              if (approachSuggestion && approachSuggestion.segment) {
+                targetToken = `t${approachSuggestion.segment}`;
+                isFromSequence = false; // Approach targets are fallback (apply variance)
+                console.log(`[BOT] Approach play for ${scoreLeft}: T${approachSuggestion.segment} - ${approachSuggestion.reason}`);
+                console.log(`[BOT] Approach alternatives:`, approachSuggestion.alternatives?.map((a: any) => `T${a.segment}(${a.quality})`).join(', ') || 'none');
+              } else {
+                // Fallback to T20 if approach suggestion fails
+                console.warn(`[BOT] No approach suggestion for ${scoreLeft}, using fallback T20`);
+                targetToken = 't20';
+                isFromSequence = false;
+              }
+            } catch (err) {
+              console.warn(`[BOT] Failed to get approach suggestion for ${scoreLeft}:`, err);
+              targetToken = 't20';
+              isFromSequence = false;
+            }
           }
 
           const intended = parseCheckoutTarget(targetToken);
@@ -1173,32 +1200,46 @@ export default function GameScreen() {
               : intended
           );
 
-          const isCheckoutSingle = intendedWithVariance[0] === 'S' && scoreLeft <= 60;
-          const checkoutSingleHitChance = isCheckoutSingle
-            ? getCheckoutSingleHitChance(level)
-            : undefined;
+          const isCheckoutSetup = intendedWithVariance[0] === 'S' && scoreLeft <= 60;
 
-          console.log(`[BOT] Dart ${i + 1}: Score left=${scoreLeft}, Aiming at=${intendedWithVariance}${checkoutSingleHitChance ? ` (${(checkoutSingleHitChance * 100).toFixed(1)}% hit chance)` : ''}`);
+          console.log(`[BOT] Dart ${i + 1}: Score left=${scoreLeft}, Aiming at=${intendedWithVariance}`);
 
           // Track if aiming at double
           // Only track double attempts when finishing (score = 50 or score is 2-40 even)
           const canFinishOnDouble = scoreLeft === 50 || (scoreLeft >= 2 && scoreLeft <= 40 && scoreLeft % 2 === 0);
           const isAimingAtDouble = intendedWithVariance[0] === 'D';
+          const lowLevelDoublePenaltyByLevel: Record<number, number> = {
+            1: 0.70,
+            2: 0.75,
+            3: 0.80,
+            4: 0.85,
+            5: 0.90,
+            6: 0.95,
+          };
+          const activeDoublePenalty = lowLevelDoublePenaltyByLevel[level] ?? 1.0;
           if (isAimingAtDouble && canFinishOnDouble) {
             doublesAttempted++;
           }
 
           // Pass previous dart for "following the marker" bonus
           const previousDart = i > 0 ? darts[i - 1] : null;
-          const dart = simulateDartAtTarget(level, intendedWithVariance, checkoutSingleHitChance, isCheckoutSingle, previousDart);
+          const dart = simulateDartAtTarget(level, intendedWithVariance, undefined, isCheckoutSetup, previousDart);
           darts.push(dart);
+
+          if (isAimingAtDouble) {
+            console.log(
+              `[BOT][DOUBLE %] Aim=${intendedWithVariance} HitChance=${(dart.hitProbability * 100).toFixed(1)}% | Level=${level} | DoublePenalty=${activeDoublePenalty.toFixed(2)}`
+            );
+          }
           
           // Log marker bonus if applied
           if (dart.markerBonus && dart.markerBonus > 0) {
             console.log(`[BOT] Marker bonus: +${(dart.markerBonus * 100).toFixed(1)}% hit chance (following previous dart)`);
           }
           
-          console.log(`[BOT] Dart ${i + 1}: Hit=${dart.actual}, Score=${dart.score}, Success=${dart.actualHit ? '✓' : '✗'}`);
+          console.log(
+            `[BOT] Dart ${i + 1}: Score left=${scoreLeft}, Aiming at=${intendedWithVariance} (${(dart.hitProbability * 100).toFixed(1)}% hit chance), Hit=${dart.actual}, Score=${dart.score}, Success=${dart.actualHit ? '✓' : '✗'}`
+          );
           
           // Track if double was hit (only for finishing attempts)
           if (isAimingAtDouble && canFinishOnDouble && dart.actual && dart.actual[0] === 'D') {

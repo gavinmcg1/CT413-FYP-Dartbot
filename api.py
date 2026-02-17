@@ -14,6 +14,7 @@ CORS(app)
 FOLDER = os.path.dirname(os.path.abspath(__file__))
 CANDIDATES_JSON = os.path.join(FOLDER, 'checkout_candidates.json')
 OUTPUT_JSON = os.path.join(FOLDER, 'checkout_simulation_results.json')
+DOUBLE_OUTCOMES_JSON = os.path.join(FOLDER, 'double_outcomes.json')
 
 # Load checkout candidates (optimal routes for all scores)
 checkout_candidates = {}
@@ -32,6 +33,206 @@ try:
     print(f"Loaded checkout data from {OUTPUT_JSON}")
 except Exception as e:
     print(f"Warning: Could not load checkout data: {e}")
+
+double_outcomes_data = {}
+try:
+    with open(DOUBLE_OUTCOMES_JSON, 'r', encoding='utf-8') as fh:
+        double_outcomes_data = json.load(fh)
+    print(f"Loaded double outcomes data from {DOUBLE_OUTCOMES_JSON}")
+except Exception as e:
+    print(f"Warning: Could not load double outcomes data: {e}")
+
+
+def is_finishable_score(score: int, out_rule: str = 'double') -> bool:
+    """
+    Check if a score is immediately finishable (1 dart finish)
+    For double-out: 2, 4, 6, ..., 40 (even numbers) or 50 (bull)
+    For straight-out: 1-20, 25, 50
+    """
+    if out_rule == 'double':
+        # Doubles 2-40 (all even) or bull (50)
+        return score == 50 or (score >= 2 and score <= 40 and score % 2 == 0)
+    else:  # straight
+        # Any single 1-50
+        return (score >= 1 and score <= 20) or score == 25 or score == 50
+
+
+def has_checkout_path(score: int) -> bool:
+    """
+    Check if a score has a checkout path available in checkout_candidates
+    """
+    return str(score) in checkout_candidates and len(checkout_candidates[str(score)]) > 0
+
+
+def evaluate_approach_segment(score: int, segment: int, out_rule: str = 'double', darts_available: int = 3) -> dict:
+    """
+    Evaluate how good a treble segment is for approach play.
+    Returns analysis of what remaining scores are reachable.
+    """
+    if segment < 1 or segment > 20:
+        return {'valid': False, 'reason': 'Invalid segment'}
+    
+    treble_value = 3 * segment
+    analysis = {
+        'segment': segment,
+        'treble_value': treble_value,
+        'reachable_scores': [],
+        'finishable_count': 0,
+        'has_checkout_path_count': 0,
+        'immediately_finishable': False,
+        'best_remaining': None,
+    }
+    
+    # Calculate all possible remaining scores by hitting treble different numbers of times
+    # Then hitting lower value alternatives for remaining darts
+    visited = set()
+    
+    # Try hitting treble N times (0 to darts_available)
+    for trebles_hit in range(darts_available + 1):
+        score_after_trebles = score - (treble_value * trebles_hit)
+        if score_after_trebles < 0:
+            continue
+        
+        remaining_darts = darts_available - trebles_hit
+        
+        # Base case: hit exactly right number of trebles
+        if score_after_trebles not in visited:
+            visited.add(score_after_trebles)
+            is_finishable = is_finishable_score(score_after_trebles, out_rule)
+            has_path = has_checkout_path(score_after_trebles) if score_after_trebles >= 2 else False
+            
+            analysis['reachable_scores'].append({
+                'score': score_after_trebles,
+                'finishable': is_finishable,
+                'has_checkout': has_path,
+            })
+            
+            if is_finishable:
+                analysis['finishable_count'] += 1
+            if has_path:
+                analysis['has_checkout_path_count'] += 1
+            if score_after_trebles == 0:
+                analysis['immediately_finishable'] = True
+        
+        # Try mixing in single hits with remaining darts
+        if remaining_darts > 0:
+            # Include common segments AND the actual segment being evaluated
+            # This allows proper evaluation of sequences like T19 + S19 + S19
+            single_segments_to_try = set([20, 19, 18, 17, segment])
+            for single_segment in single_segments_to_try:
+                single_value = single_segment
+                for singles_hit in range(remaining_darts + 1):
+                    score_after_mixed = score_after_trebles - (single_value * singles_hit)
+                    if score_after_mixed < 0:
+                        continue
+                    
+                    if score_after_mixed not in visited:
+                        visited.add(score_after_mixed)
+                        is_finishable = is_finishable_score(score_after_mixed, out_rule)
+                        has_path = has_checkout_path(score_after_mixed) if score_after_mixed >= 2 else False
+                        
+                        analysis['reachable_scores'].append({
+                            'score': score_after_mixed,
+                            'finishable': is_finishable,
+                            'has_checkout': has_path,
+                        })
+                        
+                        if is_finishable:
+                            analysis['finishable_count'] += 1
+                        if has_path:
+                            analysis['has_checkout_path_count'] += 1
+            
+            # Try bullseye values separately (outer bull = 25, inner bull = 50)
+            bullseye_values = [25, 50]
+            for bull_value in bullseye_values:
+                for bull_hits in range(remaining_darts + 1):
+                    score_after_bull = score_after_trebles - (bull_value * bull_hits)
+                    if score_after_bull < 0:
+                        continue
+                    
+                    if score_after_bull not in visited:
+                        visited.add(score_after_bull)
+                        is_finishable = is_finishable_score(score_after_bull, out_rule)
+                        has_path = has_checkout_path(score_after_bull) if score_after_bull >= 2 else False
+                        
+                        analysis['reachable_scores'].append({
+                            'score': score_after_bull,
+                            'finishable': is_finishable,
+                            'has_checkout': has_path,
+                        })
+                        
+                        if is_finishable:
+                            analysis['finishable_count'] += 1
+                        if has_path:
+                            analysis['has_checkout_path_count'] += 1
+    
+    # Find the best remaining score (immediately finishable, or has checkout path)
+    for remaining in sorted(analysis['reachable_scores'], key=lambda x: (not x['finishable'], not x['has_checkout'], x['score'])):
+        if remaining['finishable'] or remaining['has_checkout']:
+            analysis['best_remaining'] = remaining['score']
+            break
+    
+    return analysis
+
+
+def find_best_approach_segment(score: int, out_rule: str = 'double') -> dict:
+    """
+    Find the best starting segment for approach play.
+    Compares all trebles (1-20) and picks the one that leaves the best finishing positions.
+    Returns {'segment': int, 'reason': str, 'alternatives': [...]}
+    """
+    if score <= 170:
+        # Score is already in checkout range, no approach play needed
+        return {
+            'segment': 20,  # Default to 20
+            'reason': 'Score <= 170, use checkout logic',
+            'approach_play': False,
+        }
+    
+    # Evaluate all segments
+    evaluations = []
+    for segment in range(1, 21):
+        analysis = evaluate_approach_segment(score, segment, out_rule)
+        
+        # Score the segment quality
+        # Priority 1: Can it reach an immediately finishable score?
+        # Priority 2: How many finishable scores are reachable?
+        # Priority 3: How many have checkout paths?
+        quality_score = (
+            (100 if analysis['immediately_finishable'] else 0) +
+            (analysis['finishable_count'] * 10) +
+            (analysis['has_checkout_path_count'] * 5) +
+            (analysis['best_remaining'] is not None and analysis['best_remaining'] <= 170)
+        )
+        
+        evaluations.append({
+            'segment': segment,
+            'quality_score': quality_score,
+            'analysis': analysis,
+        })
+    
+    # Sort by quality score (descending)
+    evaluations.sort(key=lambda x: (-x['quality_score'], x['segment']))
+    
+    best = evaluations[0]
+    reason = ""
+    
+    if best['analysis']['immediately_finishable']:
+        reason = f"T{best['segment']} can reach 0 (immediate finish)"
+    elif best['analysis']['best_remaining'] is not None:
+        if best['analysis']['best_remaining'] <= 170:
+            reason = f"T{best['segment']} leaves {best['analysis']['best_remaining']} (checkout available)"
+        else:
+            reason = f"T{best['segment']} leaves {best['analysis']['best_remaining']}"
+    else:
+        reason = f"T{best['segment']} best of available options"
+    
+    return {
+        'segment': best['segment'],
+        'reason': reason,
+        'approach_play': True,
+        'alternatives': [{'segment': e['segment'], 'quality': e['quality_score']} for e in evaluations[:5]]
+    }
 
 
 @app.route('/api/health', methods=['GET'])
@@ -54,6 +255,8 @@ def root():
         'endpoints': {
             'GET /api/health': 'Health check',
             'GET /api/checkout/bins': 'List available average bins',
+            'GET /api/double/outcomes': 'Get double_outcomes.json data',
+            'GET /api/simulation/results': 'Get simulation_results.json data',
             'POST /api/checkout/recommend': 'Get checkout recommendation (score, average)',
             'POST /api/bot/strategy': 'Get bot throw strategy based on level and current score'
         }
@@ -79,6 +282,20 @@ def get_simulation_results():
     sim_path = os.path.join(FOLDER, 'simulation_results.json')
     try:
         with open(sim_path, 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+        return jsonify(data), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/double/outcomes', methods=['GET'])
+def get_double_outcomes():
+    """Return double_outcomes.json contents"""
+    if double_outcomes_data:
+        return jsonify(double_outcomes_data), 200
+
+    try:
+        with open(DOUBLE_OUTCOMES_JSON, 'r', encoding='utf-8') as fh:
             data = json.load(fh)
         return jsonify(data), 200
     except Exception as e:
@@ -228,6 +445,47 @@ def get_checkout_recommendation():
         }), 200
     except Exception as e:
         print(f"[API] Error getting checkout recommendation: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/approach/suggest', methods=['POST'])
+def suggest_approach_segment():
+    """
+    Suggest the best starting segment for approach play on high scores (>170).
+    Analyzes all treble segments and finds which leaves the best finishing positions.
+    
+    Request body: {
+        "score": int (typically > 170),
+        "out_rule": str ("straight" or "double", default "double")
+    }
+    
+    Response: {
+        "segment": int (1-20),
+        "reason": str,
+        "approach_play": bool,
+        "alternatives": [{"segment": int, "quality": int}, ...]
+    }
+    """
+    data = request.get_json()
+    
+    if not data:
+        return jsonify({'error': 'No JSON body provided'}), 400
+    
+    score = data.get('score')
+    out_rule = data.get('out_rule', 'double')
+    
+    if score is None:
+        return jsonify({'error': 'Score is required'}), 400
+    
+    if not isinstance(score, int) or score < 2:
+        return jsonify({'error': 'Score must be an integer >= 2'}), 400
+    
+    try:
+        result = find_best_approach_segment(score, out_rule)
+        print(f"[API] Approach suggestion for {score}: T{result['segment']} - {result['reason']}")
+        return jsonify(result), 200
+    except Exception as e:
+        print(f"[API] Error getting approach suggestion: {e}")
         return jsonify({'error': str(e)}), 500
 
 

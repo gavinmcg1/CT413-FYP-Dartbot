@@ -56,6 +56,17 @@ interface SimulationResultsResponse {
   empirical_miss_dist?: Record<string, number>;
 }
 
+interface DoubleOutcomesResponse {
+  bins?: Record<string, Record<string, {
+    hit_double?: number;
+    miss_inside?: number;
+    miss_outside?: number;
+    neighbor_singledouble?: number;
+    other?: number;
+    samples?: number;
+  }>>;
+}
+
 class DartbotAPI {
   private api: AxiosInstance;
 
@@ -130,6 +141,35 @@ class DartbotAPI {
   }
 
   /**
+   * Get approach play suggestion for high scores (>170)
+   * Recommends the best starting segment to set up good finishing positions
+   * @param score - The remaining score (typically > 170)
+   * @param outRule - "straight" or "double" out rule
+   */
+  async getApproachSuggestion(
+    score: number,
+    outRule: string = 'double'
+  ): Promise<{ segment: number; reason: string; alternatives: Array<{ segment: number; quality: number }> } | null> {
+    try {
+      console.log(`[API] Calling /api/approach/suggest with score=${score}, outRule=${outRule}`);
+      const response = await this.api.post('/api/approach/suggest', {
+        score,
+        out_rule: outRule,
+      });
+
+      console.log(`[API] Response received:`, response.data);
+      if (response.data.segment !== undefined) {
+        return response.data;
+      }
+      console.warn(`[API] Response missing segment field:`, response.data);
+      return null;
+    } catch (error) {
+      console.error(`Failed to get approach suggestion for score ${score}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Get simulation results data (miss distributions, model)
    */
   async getSimulationResults(): Promise<SimulationResultsResponse | null> {
@@ -138,6 +178,19 @@ class DartbotAPI {
       return response.data;
     } catch (error) {
       console.error('Failed to get simulation results:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Get double outcomes data (hit/miss distributions for aimed doubles)
+   */
+  async getDoubleOutcomes(): Promise<DoubleOutcomesResponse | null> {
+    try {
+      const response = await this.api.get<DoubleOutcomesResponse>('/api/double/outcomes');
+      return response.data;
+    } catch (error) {
+      console.error('Failed to get double outcomes:', error);
       return null;
     }
   }
