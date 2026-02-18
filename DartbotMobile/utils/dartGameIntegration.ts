@@ -230,15 +230,38 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
   // S50 = inner bull (smallest, hardest)
   // Prefer bin-specific empirical probability from double_outcomes (ibull)
   if (target === 'S50') {
+    const innerBullPenaltyByLevel: Record<number, number> = {
+      1: 0.20,
+      2: 0.22,
+      3: 0.24,
+      4: 0.27,
+      5: 0.30,
+      6: 0.34,
+      7: 0.38,
+      8: 0.42,
+      9: 0.46,
+      10: 0.50,
+      11: 0.54,
+      12: 0.58,
+      13: 0.62,
+      14: 0.66,
+      15: 0.70,
+      16: 0.74,
+      17: 0.78,
+      18: 0.82,
+    };
+    const innerBullPenalty = innerBullPenaltyByLevel[skillLevel] ?? 0.50;
+
     const innerBullOutcome = getInnerBullOutcome();
     if (innerBullOutcome && typeof innerBullOutcome.hit_double === 'number') {
-      return Math.max(0.01, Math.min(0.35, innerBullOutcome.hit_double));
+      const scaledInnerBull = innerBullOutcome.hit_double * innerBullPenalty;
+      return Math.max(0.005, Math.min(0.18, scaledInnerBull));
     }
 
     // Fallback curve if ibull data is unavailable
-    // Skill 1 ≈ 1.5%, Skill 10 ≈ 7.6%, Skill 18 ≈ 13.0%
-    const s50Probability = 0.015 + (skillFactor * 0.115);
-    return Math.max(0.01, Math.min(0.13, s50Probability));
+    // Skill 1 ≈ 0.5%, Skill 10 ≈ 3.5%, Skill 18 ≈ 6.5%
+    const s50Probability = 0.005 + (skillFactor * 0.060);
+    return Math.max(0.003, Math.min(0.08, s50Probability));
   }
   
   // S25 = outer bull (larger than inner, but still small)
@@ -261,12 +284,22 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
   // Low skill: 0.30x (terrible at doubles), High skill: 1.45x (excellent at doubles)
   if (mult === 'D') {
     const lowLevelDoublePenaltyByLevel: Record<number, number> = {
-      1: 0.70,
-      2: 0.75,
-      3: 0.80,
-      4: 0.85,
-      5: 0.90,
-      6: 0.95,
+      1: 0.50,
+      2: 0.55,
+      3: 0.60,
+      4: 0.65,
+      5: 0.70,
+      6: 0.75,
+      7: 0.80,
+      8: 0.84,
+      9: 0.87,
+      10: 0.90,
+      11: 0.92,
+      12: 0.94,
+      13: 0.96,
+      14: 0.97,
+      15: 0.98,
+      16: 0.99,
     };
     const lowLevelPenalty = lowLevelDoublePenaltyByLevel[skillLevel] ?? 1.0;
 
@@ -276,7 +309,7 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
       return Math.max(0.02, Math.min(0.98, doubleOutcome.hit_double * lowLevelPenalty));
     }
 
-    const doubleMultiplier = 0.30 + (skillFactor * 1.15);
+    const doubleMultiplier = 0.24 + (skillFactor * 1.08);
     return Math.max(0.02, base * doubleMultiplier * lowLevelPenalty);
   }
   
@@ -529,8 +562,15 @@ function sampleMissDestinationForSegment(
             ? (`S${getPrevSegment(segment)}` as Target)
             : (`S${getNextSegment(segment)}` as Target);
         }
-        const randomSegment = Math.floor(Math.random() * 20) + 1;
-        return `S${randomSegment}` as Target;
+        // Keep "other" misses spatially plausible around the intended double.
+        // Avoid unrealistic far misses (e.g. D16 -> S6).
+        const prev1 = getPrevSegment(segment);
+        const next1 = getNextSegment(segment);
+        const prev2 = getPrevSegment(prev1);
+        const next2 = getNextSegment(next1);
+        const nearbySegments = [segment, prev1, next1, prev2, next2];
+        const selected = nearbySegments[Math.floor(Math.random() * nearbySegments.length)] ?? segment;
+        return `S${selected}` as Target;
       }
     }
 
@@ -616,19 +656,20 @@ function calculateMarkerBonus(
     // Check if previous dart missed the board completely (actual === null, score = 0)
     // This gives a visual marker (the dart sticking in the wall/floor) to aim from
     if (previousDart.actual === null && previousDart.score === 0) {
-      // Skill-based bonus: L4: +15%, L10: +25%, L18: +40%
+      // Lower low-level bonus while keeping high-level ceiling:
+      // L1: +5%, L4: ~+9.8%, L18: +32%
       const skillFactor = (skillLevel - 1) / 17; // 0 to 1
-      const bonusMultiplier = 1.15 + (skillFactor * 0.25);
+      const bonusMultiplier = 1.05 + (skillFactor * 0.27);
       return bonusMultiplier;
     }
   }
   
   // Scenario 2: Aiming at T20, previous hit T20 → clustering/grouping effect
   // Confidence boost and muscle memory from successful hit
-  if (intended === 'T20' && previousDart.intended === 'T20') {
+  if (skillLevel >= 13 && intended === 'T20' && previousDart.intended === 'T20') {
     // Check if previous actually hit T20
     if (previousDart.actual === 'T20' && previousDart.actualHit) {
-      // Skill-based bonus: L4: +10%, L10: +18%, L18: +30%
+      // Only active for level 13+ players
       const skillFactor = (skillLevel - 1) / 17; // 0 to 1
       const bonusMultiplier = 1.10 + (skillFactor * 0.20);
       return bonusMultiplier;
@@ -893,6 +934,12 @@ export function parseCheckoutTarget(input: string): Target {
 
   const [, mult, num] = match;
   const segment = parseInt(num, 10);
+
+  // Allow explicit singles for bulls from API approach logic
+  if (mult === 's' && (segment === 25 || segment === 50)) {
+    return `S${segment}` as Target;
+  }
+
   if (segment < 1 || segment > 20) return 'T20' as Target;
 
   switch (mult) {

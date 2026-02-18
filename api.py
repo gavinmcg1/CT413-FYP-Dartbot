@@ -15,6 +15,7 @@ FOLDER = os.path.dirname(os.path.abspath(__file__))
 CANDIDATES_JSON = os.path.join(FOLDER, 'checkout_candidates.json')
 OUTPUT_JSON = os.path.join(FOLDER, 'checkout_simulation_results.json')
 DOUBLE_OUTCOMES_JSON = os.path.join(FOLDER, 'double_outcomes.json')
+IMPOSSIBLE_CHECKOUT_SCORES = {1, 159, 162, 163, 165, 166, 168, 169}
 
 # Load checkout candidates (optimal routes for all scores)
 checkout_candidates = {}
@@ -33,6 +34,15 @@ try:
     print(f"Loaded checkout data from {OUTPUT_JSON}")
 except Exception as e:
     print(f"Warning: Could not load checkout data: {e}")
+
+simulation_results_data = {}
+try:
+    sim_path = os.path.join(FOLDER, 'simulation_results.json')
+    with open(sim_path, 'r', encoding='utf-8') as fh:
+        simulation_results_data = json.load(fh)
+    print(f"Loaded simulation results from {sim_path}")
+except Exception as e:
+    print(f"Warning: Could not load simulation results: {e}")
 
 double_outcomes_data = {}
 try:
@@ -166,72 +176,287 @@ def evaluate_approach_segment(score: int, segment: int, out_rule: str = 'double'
                         if has_path:
                             analysis['has_checkout_path_count'] += 1
     
-    # Find the best remaining score (immediately finishable, or has checkout path)
-    for remaining in sorted(analysis['reachable_scores'], key=lambda x: (not x['finishable'], not x['has_checkout'], x['score'])):
-        if remaining['finishable'] or remaining['has_checkout']:
-            analysis['best_remaining'] = remaining['score']
-            break
+    # Find the best remaining score among reachable finish/checkouts.
+    # Prefer higher checkout leaves (closer to 170) over very low leaves.
+    reachable_checkoutish = [
+        item for item in analysis['reachable_scores']
+        if item['finishable'] or item['has_checkout']
+    ]
+    if reachable_checkoutish:
+        under_171 = [item for item in reachable_checkoutish if item['score'] <= 170]
+        preferred_pool = under_171 if under_171 else reachable_checkoutish
+        analysis['best_remaining'] = max(preferred_pool, key=lambda x: x['score'])['score']
     
     return analysis
 
 
-def find_best_approach_segment(score: int, out_rule: str = 'double') -> dict:
+def find_best_approach_segment(score: int, out_rule: str = 'double', darts_available: int = 3) -> dict:
     """
     Find the best starting segment for approach play.
     Compares all trebles (1-20) and picks the one that leaves the best finishing positions.
     Returns {'segment': int, 'reason': str, 'alternatives': [...]}
     """
+    preferred_treble_segments = [20, 19, 18, 17]
+    preferred_single_segments = [20, 19, 18, 17, 25, 50]
+    impossible_checkouts = IMPOSSIBLE_CHECKOUT_SCORES - {1}
+
+    # Deterministic overrides for specific score/dart scenarios.
+    # Grouped by target so tuning is easy (e.g. all T20 starts together).
+    t20_overrides = {
+        (215, 3),
+        (231, 3),
+        (235, 3),
+        (190, 1),
+        (171, 1),
+        (171, 3),
+        (172, 3),
+        (172, 1),
+        (175, 1),
+        (175, 3),
+        (176, 1),
+        (176, 3),
+        (177, 3),
+        (177, 1),
+        (178, 1),
+        (178, 3),
+        (180, 1),
+        (181, 1),
+        (181, 3),
+        (184, 1),
+        (184, 3),
+        (185, 3),
+        (186, 3),
+        (187, 3),
+        (187, 1),
+        (191, 3),
+        (191, 1),
+        (192, 3),
+        (193, 3),
+        (193, 1),
+        (194, 3),
+        (194, 1),
+        (196, 1),
+        (197, 1),
+        (198, 1),
+        (199, 1),
+        (199, 3),
+        (200, 1),
+        (201, 1),
+        (201, 3),
+        (202, 1),
+        (203, 1),
+        (204, 1),
+        (205, 1),
+        (206, 1),
+        (207, 1),
+        (208, 1),
+        (209, 3),
+        (210, 1),
+        (211, 1),
+        (211, 3),
+        (212, 3),
+        (213, 3),
+        (214, 1),
+        (217, 1),
+        (217, 3),
+        (219, 3),
+        (220, 1),
+        (221, 3),
+        (222, 3),
+        (223, 3),
+        (224, 3),
+        (225, 3),
+        (226, 3),
+        (227, 3),
+        (228, 3),
+        (229, 3),
+        (243, 3),
+        (244, 3),
+        (246, 3),
+        (251, 3),
+        (253, 3),
+        (257, 3),
+        (261, 3),
+        (267, 3),
+    }
+    t19_overrides = {
+        (265, 3),
+        (271, 3),
+        (173, 1),
+        (179, 1),
+        (211, 2),
+        (214, 2),
+        (219, 1),
+        (233, 3),
+        (243, 2),
+        (246, 2),
+        (249, 2),
+    }
+    t18_overrides = {
+        (174, 1),
+        (213, 2),
+        (242, 2),
+        (245, 2),
+        (248, 2),
+    }
+
+    override_key = (score, darts_available)
+    override_target = None
+    if override_key in t20_overrides:
+        override_target = 't20'
+    elif override_key in t19_overrides:
+        override_target = 't19'
+    elif override_key in t18_overrides:
+        override_target = 't18'
+
+    if override_target and 171 <= score <= 271:
+        segment = 20
+        if len(override_target) > 1 and override_target[1:].isdigit():
+            segment = int(override_target[1:])
+
+        return {
+            'segment': segment,
+            'target': override_target,
+            'reason': f"Override profile: start on {override_target.upper()} for score {score} with {darts_available} darts",
+            'approach_play': True,
+            'alternatives': [
+                {'segment': 20, 'target': 't20', 'quality': 0},
+                {'segment': 19, 'target': 't19', 'quality': 0},
+                {'segment': 18, 'target': 't18', 'quality': 0},
+                {'segment': 17, 'target': 't17', 'quality': 0},
+                {'segment': 25, 'target': 's25', 'quality': 0},
+            ],
+        }
+
     if score <= 170:
         # Score is already in checkout range, no approach play needed
         return {
-            'segment': 20,  # Default to 20
+            'segment': 20,
+            'target': 't20',
             'reason': 'Score <= 170, use checkout logic',
             'approach_play': False,
         }
-    
-    # Evaluate all segments
+
+    # Approach play is only intended for 171-271.
+    # Outside this range, use power scoring on T20.
+    if score > 271:
+        return {
+            'segment': 20,
+            'target': 't20',
+            'reason': 'Score > 271, power scoring on T20',
+            'approach_play': False,
+            'alternatives': [
+                {'segment': 20, 'target': 't20', 'quality': 0},
+                {'segment': 19, 'target': 't19', 'quality': 0},
+                {'segment': 18, 'target': 't18', 'quality': 0},
+                {'segment': 17, 'target': 't17', 'quality': 0},
+                {'segment': 25, 'target': 's25', 'quality': 0},
+            ],
+        }
+
+    # With one dart left, prioritize leaving the highest reachable checkout score
+    # using practical setup singles from 20/19/18/17/25/50.
+    if darts_available <= 1:
+        one_dart_options = []
+        for single_segment in preferred_single_segments:
+            remaining = score - single_segment
+            if remaining < 2:
+                continue
+
+            has_path = has_checkout_path(remaining)
+            finishable = is_finishable_score(remaining, out_rule)
+            if not has_path and not finishable:
+                continue
+
+            # Prefer highest reachable checkout score (e.g., leave 170 from 189 with S19)
+            quality = remaining
+            one_dart_options.append({
+                'target': f's{single_segment}',
+                'segment': single_segment,
+                'remaining': remaining,
+                'quality': quality,
+                'finishable': finishable,
+                'has_checkout': has_path,
+            })
+
+        if one_dart_options:
+            one_dart_options.sort(key=lambda x: (-x['quality'], x['segment']))
+            best = one_dart_options[0]
+            return {
+                'segment': best['segment'],
+                'target': best['target'],
+                'reason': f"1 dart left: aim {best['target'].upper()} to leave {best['remaining']}",
+                'approach_play': True,
+                'alternatives': [
+                    {'segment': option['segment'], 'target': option['target'], 'quality': option['quality']}
+                    for option in one_dart_options[:5]
+                ],
+            }
+
+    # Evaluate preferred treble segments for strategic setup.
     evaluations = []
-    for segment in range(1, 21):
-        analysis = evaluate_approach_segment(score, segment, out_rule)
-        
-        # Score the segment quality
-        # Priority 1: Can it reach an immediately finishable score?
-        # Priority 2: How many finishable scores are reachable?
-        # Priority 3: How many have checkout paths?
+    for segment in preferred_treble_segments:
+        analysis = evaluate_approach_segment(score, segment, out_rule, darts_available)
+
+        # Score segment quality with setup-first priorities.
         quality_score = (
-            (100 if analysis['immediately_finishable'] else 0) +
-            (analysis['finishable_count'] * 10) +
-            (analysis['has_checkout_path_count'] * 5) +
-            (analysis['best_remaining'] is not None and analysis['best_remaining'] <= 170)
+            (120 if analysis['immediately_finishable'] else 0) +
+            (analysis['finishable_count'] * 12) +
+            (analysis['has_checkout_path_count'] * 8) +
+            (20 if analysis['best_remaining'] is not None and analysis['best_remaining'] <= 170 else 0)
         )
-        
+
+        # Encourage high scoring when setup value is tied.
+        quality_score += segment
+
         evaluations.append({
             'segment': segment,
+            'target': f"t{segment}",
             'quality_score': quality_score,
             'analysis': analysis,
         })
-    
-    # Sort by quality score (descending)
-    evaluations.sort(key=lambda x: (-x['quality_score'], x['segment']))
-    
+
+    evaluations.sort(key=lambda x: (-x['quality_score'], -x['segment']))
     best = evaluations[0]
-    reason = ""
-    
+
+    treble_hit_leave = score - (best['segment'] * 3)
     if best['analysis']['immediately_finishable']:
-        reason = f"T{best['segment']} can reach 0 (immediate finish)"
-    elif best['analysis']['best_remaining'] is not None:
-        if best['analysis']['best_remaining'] <= 170:
-            reason = f"T{best['segment']} leaves {best['analysis']['best_remaining']} (checkout available)"
+        reason = f"{best['target'].upper()} can reach 0 (immediate finish)"
+    elif best['analysis']['best_remaining'] is not None and best['analysis']['best_remaining'] <= 170:
+        if treble_hit_leave >= 2:
+            reason = (
+                f"{best['target'].upper()} leaves {treble_hit_leave} on treble hit "
+                f"(best setup leave {best['analysis']['best_remaining']})"
+            )
         else:
-            reason = f"T{best['segment']} leaves {best['analysis']['best_remaining']}"
+            reason = f"{best['target'].upper()} leaves {best['analysis']['best_remaining']} (checkout available)"
+    elif best['analysis']['best_remaining'] is not None:
+        if treble_hit_leave >= 2:
+            reason = (
+                f"{best['target'].upper()} leaves {treble_hit_leave} on treble hit "
+                f"(best setup leave {best['analysis']['best_remaining']})"
+            )
+        else:
+            reason = f"{best['target'].upper()} leaves {best['analysis']['best_remaining']}"
     else:
-        reason = f"T{best['segment']} best of available options"
-    
+        if treble_hit_leave >= 2:
+            reason = f"{best['target'].upper()} leaves {treble_hit_leave} on treble hit"
+        else:
+            reason = f"{best['target'].upper()} best setup among preferred segments"
+
     return {
         'segment': best['segment'],
+        'target': best['target'],
         'reason': reason,
         'approach_play': True,
-        'alternatives': [{'segment': e['segment'], 'quality': e['quality_score']} for e in evaluations[:5]]
+        'alternatives': [
+            {
+                'segment': e['segment'],
+                'target': e['target'],
+                'quality': e['quality_score'],
+            }
+            for e in evaluations[:5]
+        ]
     }
 
 
@@ -279,26 +504,36 @@ def get_checkout_bins():
 @app.route('/api/simulation/results', methods=['GET'])
 def get_simulation_results():
     """Return simulation_results.json contents"""
-    sim_path = os.path.join(FOLDER, 'simulation_results.json')
+    if not simulation_results_data:
+        print("[API] simulation_results_data is empty")
+        return jsonify({'error': 'No simulation results data available'}), 404
+    
     try:
-        with open(sim_path, 'r', encoding='utf-8') as fh:
-            data = json.load(fh)
-        return jsonify(data), 200
+        response = jsonify(simulation_results_data)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        data_size = len(str(simulation_results_data))
+        print(f"[API] Returning simulation results: {data_size} bytes")
+        return response, 200
     except Exception as e:
+        print(f"[API] Error returning simulation results: {e}")
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/double/outcomes', methods=['GET'])
 def get_double_outcomes():
     """Return double_outcomes.json contents"""
-    if double_outcomes_data:
-        return jsonify(double_outcomes_data), 200
-
+    if not double_outcomes_data:
+        print("[API] double_outcomes_data is empty")
+        return jsonify({'error': 'No double outcomes data available'}), 404
+    
     try:
-        with open(DOUBLE_OUTCOMES_JSON, 'r', encoding='utf-8') as fh:
-            data = json.load(fh)
-        return jsonify(data), 200
+        response = jsonify(double_outcomes_data)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        data_size = len(str(double_outcomes_data))
+        print(f"[API] Returning double outcomes: {data_size} bytes")
+        return response, 200
     except Exception as e:
+        print(f"[API] Error returning double outcomes: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -456,11 +691,13 @@ def suggest_approach_segment():
     
     Request body: {
         "score": int (typically > 170),
-        "out_rule": str ("straight" or "double", default "double")
+        "out_rule": str ("straight" or "double", default "double"),
+        "darts_available": int (1-3, default 3)
     }
     
     Response: {
         "segment": int (1-20),
+        "target": str (e.g. "t20", "s19"),
         "reason": str,
         "approach_play": bool,
         "alternatives": [{"segment": int, "quality": int}, ...]
@@ -473,16 +710,21 @@ def suggest_approach_segment():
     
     score = data.get('score')
     out_rule = data.get('out_rule', 'double')
+    darts_available = data.get('darts_available', 3)
     
     if score is None:
         return jsonify({'error': 'Score is required'}), 400
     
     if not isinstance(score, int) or score < 2:
         return jsonify({'error': 'Score must be an integer >= 2'}), 400
+
+    if not isinstance(darts_available, int) or darts_available < 1 or darts_available > 3:
+        return jsonify({'error': 'darts_available must be an integer between 1 and 3'}), 400
     
     try:
-        result = find_best_approach_segment(score, out_rule)
-        print(f"[API] Approach suggestion for {score}: T{result['segment']} - {result['reason']}")
+        result = find_best_approach_segment(score, out_rule, darts_available)
+        target_for_log = result.get('target', f"t{result['segment']}")
+        print(f"[API] Approach suggestion for {score} ({darts_available} darts): {target_for_log.upper()} - {result['reason']}")
         return jsonify(result), 200
     except Exception as e:
         print(f"[API] Error getting approach suggestion: {e}")
@@ -519,7 +761,7 @@ def get_bot_strategy():
     
     # Check if we can finish (using checkout data)
     checkout_eligible = [2, 170]  # Score range for checkouts
-    impossible_checkouts = [1, 159, 162, 163, 165, 166, 168, 169]
+    impossible_checkouts = IMPOSSIBLE_CHECKOUT_SCORES
     
     can_attempt_checkout = (
         current_score >= checkout_eligible[0] and 
@@ -562,5 +804,5 @@ if __name__ == '__main__':
     print("  GET /api/checkout/bins - List available average bins")
     print("  POST /api/checkout/recommend - Get checkout recommendation")
     print("  POST /api/bot/strategy - Get bot strategy")
-    print("\nListening on http://0.0.0.0:5000")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print("\nListening on http://0.0.0.0:8000")
+    app.run(host='0.0.0.0', port=8000, debug=True)

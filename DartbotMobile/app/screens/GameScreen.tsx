@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, ScrollView, Modal, Platform } from 'react-native';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
+import { View, StyleSheet, ScrollView, Modal, Platform, BackHandler } from 'react-native';
 import { Text, Button, useTheme } from 'react-native-paper';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, usePreventRemove } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { dartbotAPI } from '../../services/dartbotAPI';
 import { simulateBotTurn, simulateDartAtTarget, parseCheckoutTarget, getAverageRangeForLevel, getT20HitProbability, getBotCheckoutProbability, formatBotDarts, setSimulationResults, setAverageRangeForSimulation, setDoubleOutcomesResults, applyIntendedHitVariance } from '../../utils/dartGameIntegration';
@@ -1072,20 +1072,27 @@ export default function GameScreen() {
     const currentLegTotal = currentLegThrows.reduce((a, b) => a + b, 0);
     const currentThreeDartAvg = dartsInCurrentLeg > 0 ? (currentLegTotal / dartsInCurrentLeg) * 3 : 0;
 
-    // If in checkout range, dynamically choose target per dart based on remaining score
+    // Dynamically choose targets per dart based on live score (checkout vs approach)
     if (remainingScore <= 170) {
       console.log(`[BOT] Entering checkout range (score <= 170)`);
       isAttemptingCheckout = true;
-      try {
-        const averageRange = getAverageRangeForLevel(level);
-        const darts: typeof turnResult.darts = [];
-        let turnScore = 0;
-        let finished = false;
-        let doublesAttempted = 0;
-        let doublesHit = 0;
-        let checkoutSequence: string[] = [];
-        let sequenceIndex = 0; // Track position in the checkout sequence
-        let followingSequence = false; // Whether we're actively following a sequence
+    } else {
+      console.log(`[BOT] Entering approach range (score > 170)`);
+      isAttemptingCheckout = false;
+    }
+
+    let usedRoutingSimulation = true;
+
+    try {
+      const averageRange = getAverageRangeForLevel(level);
+      const darts: typeof turnResult.darts = [];
+      let turnScore = 0;
+      let finished = false;
+      let doublesAttempted = 0;
+      let doublesHit = 0;
+      let checkoutSequence: string[] = [];
+      let sequenceIndex = 0; // Track position in the checkout sequence
+      let followingSequence = false; // Whether we're actively following a sequence
 
         console.log(`[BOT] Starting turn at ${remainingScore}`);
 
@@ -1094,6 +1101,7 @@ export default function GameScreen() {
           const scoreLeft = remainingScore - turnScore;
           let targetToken: string;
           let isFromSequence = false; // Track if target came from a checkout sequence
+          let shouldApplyVariance = true;
 
           // Check if we can finish with one dart
           const canFinishWithOneDart = () => {
@@ -1146,18 +1154,47 @@ export default function GameScreen() {
                   isFromSequence = true;
                   console.log(`[BOT] Optimal sequence for ${scoreLeft} with ${remainingDartsInTurn} darts: ${bestSequence}, using first dart: ${targetToken}`);
                 } else {
-                  // No valid sequence with remaining darts - still use best sequence's first target
-                  const allCandidates = recommendation.all_candidates || [];
-                  const bestSeq = allCandidates[0] ?? recommendation.best?.sequence;
-                  if (bestSeq) {
-                    const parts = bestSeq.split(',');
-                    targetToken = parts[0] ?? 't20';
-                    isFromSequence = true;
-                    console.warn(`[BOT] No sequence fits ${remainingDartsInTurn} darts for ${scoreLeft}, using best sequence's first target: ${targetToken} (from ${bestSeq})`);
+                  // No valid sequence with remaining darts.
+                  // With one dart left, request an approach/setup suggestion (handles bogey scores).
+                  if (remainingDartsInTurn === 1) {
+                    // Preserve previous behavior: if checkout API has a route (even 2+ darts),
+                    // follow its first dart as setup when only one dart remains this turn.
+                    const allCandidates = recommendation.all_candidates || [];
+                    const bestSeq = allCandidates[0] ?? recommendation.best?.sequence;
+                    if (bestSeq) {
+                      const parts = bestSeq.split(',');
+                      targetToken = parts[0] ?? 't20';
+                      isFromSequence = true;
+                      console.log(`[BOT] No 1-dart checkout for ${scoreLeft}; using first dart from best checkout route: ${targetToken} (from ${bestSeq})`);
+                    } else {
+                      const setupSuggestion = await dartbotAPI.getApproachSuggestion(scoreLeft, outRule, 1);
+                      const apiTarget = setupSuggestion?.target;
+                      const apiIsActionable = Boolean(apiTarget) && setupSuggestion?.approach_play !== false;
+
+                      if (setupSuggestion && apiIsActionable) {
+                        targetToken = apiTarget as string;
+                        isFromSequence = true;
+                        console.log(`[BOT] No 1-dart checkout for ${scoreLeft}; using setup target ${targetToken} (${setupSuggestion.reason ?? 'API setup'})`);
+                      } else {
+                        targetToken = 't20';
+                        isFromSequence = false;
+                        console.warn(`[BOT] No setup suggestion for ${scoreLeft}, fallback T20`);
+                      }
+                    }
                   } else {
-                    console.warn(`[BOT] No checkout recommendation found for ${scoreLeft}, using fallback T20`);
-                    targetToken = 't20';
-                    isFromSequence = false;
+                    // For 2+ darts remaining, keep prior fallback behavior.
+                    const allCandidates = recommendation.all_candidates || [];
+                    const bestSeq = allCandidates[0] ?? recommendation.best?.sequence;
+                    if (bestSeq) {
+                      const parts = bestSeq.split(',');
+                      targetToken = parts[0] ?? 't20';
+                      isFromSequence = true;
+                      console.warn(`[BOT] No sequence fits ${remainingDartsInTurn} darts for ${scoreLeft}, using best sequence's first target: ${targetToken} (from ${bestSeq})`);
+                    } else {
+                      console.warn(`[BOT] No checkout recommendation found for ${scoreLeft}, using fallback T20`);
+                      targetToken = 't20';
+                      isFromSequence = false;
+                    }
                   }
                 }
               }
@@ -1171,30 +1208,41 @@ export default function GameScreen() {
             // Approach play identifies segments that leave better finishing positions
             console.log(`[BOT] Route: scoreLeft > 170 (${scoreLeft}), calling approach play API...`);
             try {
-              const approachSuggestion = await dartbotAPI.getApproachSuggestion(scoreLeft, outRule);
+              const remainingDartsInTurn = 3 - i; // i=0 => 3 darts, i=1 => 2 darts, i=2 => 1 dart
+              const approachSuggestion = await dartbotAPI.getApproachSuggestion(scoreLeft, outRule, remainingDartsInTurn);
               console.log(`[BOT] API response:`, approachSuggestion);
               if (approachSuggestion && approachSuggestion.segment) {
-                targetToken = `t${approachSuggestion.segment}`;
-                isFromSequence = false; // Approach targets are fallback (apply variance)
-                console.log(`[BOT] Approach play for ${scoreLeft}: T${approachSuggestion.segment} - ${approachSuggestion.reason}`);
-                console.log(`[BOT] Approach alternatives:`, approachSuggestion.alternatives?.map((a: any) => `T${a.segment}(${a.quality})`).join(', ') || 'none');
+                targetToken = approachSuggestion.target ?? `t${approachSuggestion.segment}`;
+                isFromSequence = false;
+                // Do not mutate intended approach targets (e.g. T20 -> T1/T5).
+                // Miss behavior is already handled in simulateDartAtTarget.
+                shouldApplyVariance = false;
+                console.log(`[BOT] Approach play for ${scoreLeft} (${remainingDartsInTurn} darts): ${targetToken.toUpperCase()} - ${approachSuggestion.reason}`);
+                console.log(
+                  `[BOT] Approach alternatives:`,
+                  approachSuggestion.alternatives
+                    ?.map((a: any) => `${(a.target ?? `t${a.segment}`).toUpperCase()}(${a.quality})`)
+                    .join(', ') || 'none'
+                );
               } else {
                 // Fallback to T20 if approach suggestion fails
                 console.warn(`[BOT] No approach suggestion for ${scoreLeft}, using fallback T20`);
                 targetToken = 't20';
                 isFromSequence = false;
+                shouldApplyVariance = false;
               }
             } catch (err) {
               console.warn(`[BOT] Failed to get approach suggestion for ${scoreLeft}:`, err);
               targetToken = 't20';
               isFromSequence = false;
+              shouldApplyVariance = false;
             }
           }
 
           const intended = parseCheckoutTarget(targetToken);
           // IMPORTANT: Do NOT apply variance to checkout sequence targets - use them exactly as specified
-          // Only apply variance to genuine T20 fallbacks
-          const intendedWithVariance = isFromSequence ? intended : (
+          // Also skip variance when API explicitly indicates power scoring mode.
+          const intendedWithVariance = (isFromSequence || !shouldApplyVariance) ? intended : (
             !(outRule === 'double' && scoreLeft <= 60)
               ? applyIntendedHitVariance(intended, level, scoreLeft)
               : intended
@@ -1209,12 +1257,22 @@ export default function GameScreen() {
           const canFinishOnDouble = scoreLeft === 50 || (scoreLeft >= 2 && scoreLeft <= 40 && scoreLeft % 2 === 0);
           const isAimingAtDouble = intendedWithVariance[0] === 'D';
           const lowLevelDoublePenaltyByLevel: Record<number, number> = {
-            1: 0.70,
-            2: 0.75,
-            3: 0.80,
-            4: 0.85,
-            5: 0.90,
-            6: 0.95,
+            1: 0.50,
+            2: 0.55,
+            3: 0.60,
+            4: 0.65,
+            5: 0.70,
+            6: 0.75,
+            7: 0.80,
+            8: 0.84,
+            9: 0.87,
+            10: 0.90,
+            11: 0.92,
+            12: 0.94,
+            13: 0.96,
+            14: 0.97,
+            15: 0.98,
+            16: 0.99,
           };
           const activeDoublePenalty = lowLevelDoublePenaltyByLevel[level] ?? 1.0;
           if (isAimingAtDouble && canFinishOnDouble) {
@@ -1297,54 +1355,129 @@ export default function GameScreen() {
           }
         }
         
-        // Track double attempts (every time bot aims at a finishing double)
-        if (doublesAttempted > 0) {
-          setBotCumulativeDoubleAttempts((prev) => prev + doublesAttempted);
-        }
-        // Note: Success is tracked in applyThrow when bot actually finishes
-
-        // Set final turn result if not already set by break statements
-        if (!resultAlreadySet && !finished && turnScore > 0) {
-          // Valid turn that didn't finish and didn't bust
-          console.log(`[BOT] Turn completed: ${turnScore} scored, ${remainingScore - turnScore} remaining`);
-          turnResult = { darts, totalScore: turnScore, finished: false };
-        } else if (!resultAlreadySet && !finished && turnScore === 0) {
-          // Turn resulted in 0 (missed all darts in non-checkout)
-          console.log(`[BOT] Turn ended with 0 score`);
-          turnResult = { darts, totalScore: 0, finished: false };
-        }
-      } catch (err) {
-        // Fallback to local simulation
-        console.warn('Checkout data unavailable, using local turn simulation');
+      // Track double attempts (every time bot aims at a finishing double)
+      if (doublesAttempted > 0) {
+        setBotCumulativeDoubleAttempts((prev) => prev + doublesAttempted);
       }
+      // Note: Success is tracked in applyThrow when bot actually finishes
+
+      // Set final turn result if not already set by break statements
+      if (!resultAlreadySet && !finished && turnScore > 0) {
+        // Valid turn that didn't finish and didn't bust
+        console.log(`[BOT] Turn completed: ${turnScore} scored, ${remainingScore - turnScore} remaining`);
+        turnResult = { darts, totalScore: turnScore, finished: false };
+      } else if (!resultAlreadySet && !finished && turnScore === 0) {
+        // Turn resulted in 0 (missed all darts in non-checkout)
+        console.log(`[BOT] Turn ended with 0 score`);
+        turnResult = { darts, totalScore: 0, finished: false };
+      }
+    } catch (err) {
+      // Fallback to local simulation
+      usedRoutingSimulation = false;
+      console.warn('Routing data unavailable, using local turn simulation');
     }
 
-    // Clamp bot's throw to keep average realistic for skill level (not in checkout)
-    let finalThrow = turnResult.totalScore;
-    let wasModified = false;
-    if (!isAttemptingCheckout && finalThrow > 0 && turns > 0) {
-      // Check if this throw would push average too far above target
-      const projectedNewTotal = currentLegTotal + finalThrow;
-      const projectedNewDarts = dartsInCurrentLeg + 3; // Adding 3 more darts
-      const projectedAvg = (projectedNewTotal / projectedNewDarts) * 3;
+    // Adjust non-checkout throws via dart-by-dart remapping (instead of raw score scaling)
+    // so we keep realistic dart breakdown output.
+    const boardOrder = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5];
+    const boardIndex = new Map<number, number>(boardOrder.map((seg, idx) => [seg, idx]));
 
-      // If projected average is way above target (>25% over), reduce the throw
-      if (projectedAvg > targetAvg * 1.25) {
-        // Scale down the throw to keep it more realistic
-        const scaleFactor = (targetAvg * 1.25) / projectedAvg;
-        const originalThrow = finalThrow;
-        finalThrow = Math.floor(finalThrow * scaleFactor);
-        wasModified = true;
-        console.log(`[BOT] Scaled down from ${originalThrow} to ${finalThrow} to maintain realistic average`);
+    const getSingleNeighborSegments = (segment: number): number[] => {
+      const idx = boardIndex.get(segment);
+      if (idx === undefined) return [];
+      const left1 = boardOrder[(idx - 1 + 20) % 20];
+      const right1 = boardOrder[(idx + 1) % 20];
+      const left2 = boardOrder[(idx - 2 + 20) % 20];
+      const right2 = boardOrder[(idx + 2) % 20];
+      return [left1, right1, left2, right2];
+    };
+
+    const getReduceOptions = (score: number): number[] => {
+      // Trebles can collapse to singles (e.g. 60 -> 20)
+      if (score % 3 === 0 && score >= 3 && score <= 60) {
+        const single = score / 3;
+        const neighbors = getSingleNeighborSegments(single);
+        return [single, ...neighbors.filter((n) => n < single)];
       }
-      // If projected average is too low (<75% of target), encourage higher throws occasionally
-      else if (projectedAvg < targetAvg * 0.75 && Math.random() < 0.3) {
-        // 30% chance to keep the throw or boost it slightly
-        const originalThrow = finalThrow;
-        finalThrow = Math.min(finalThrow + 10, 180); // Slight boost
-        if (finalThrow !== originalThrow) {
-          wasModified = true;
-          console.log(`[BOT] Boosted from ${originalThrow} to ${finalThrow} to maintain realistic average`);
+
+      // Singles remap to neighbors (e.g. 20 -> 1/5/18/12)
+      if (score >= 1 && score <= 20) {
+        return getSingleNeighborSegments(score).filter((n) => n < score);
+      }
+
+      return [];
+    };
+
+    const getIncreaseOptions = (score: number): number[] => {
+      // Requested behavior: nearby misses can be pulled back toward 20
+      if (score === 1 || score === 5 || score === 18 || score === 12 || score === 19) {
+        return [20];
+      }
+
+      // Generic single uplift toward board center segment 20
+      if (score >= 1 && score <= 20 && score !== 20) {
+        const neighbors = getSingleNeighborSegments(score);
+        const preferred = neighbors.filter((n) => n > score);
+        return preferred.length > 0 ? preferred : [20];
+      }
+
+      return [];
+    };
+
+    let adjustedDartScores = turnResult.darts.map((d) => d.score);
+    let finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
+
+    if (!usedRoutingSimulation && !isAttemptingCheckout && finalThrow > 0 && turns > 0) {
+      const projectedNewDarts = dartsInCurrentLeg + 3;
+      const upperAvg = targetAvg * 1.25;
+      const lowerAvg = targetAvg * 0.75;
+      const projectedAvgFor = (total: number) => ((currentLegTotal + total) / projectedNewDarts) * 3;
+
+      // Reduce by moving dart scores to neighboring/lower outcomes
+      let projectedAvg = projectedAvgFor(finalThrow);
+      let adjustmentCount = 0;
+      while (projectedAvg > upperAvg && adjustmentCount < 6) {
+        let bestIdx = -1;
+        let bestNewScore = -1;
+        let bestDrop = 0;
+
+        for (let idx = 0; idx < adjustedDartScores.length; idx++) {
+          const current = adjustedDartScores[idx];
+          const options = getReduceOptions(current);
+          for (const next of options) {
+            const drop = current - next;
+            if (drop > bestDrop) {
+              bestDrop = drop;
+              bestIdx = idx;
+              bestNewScore = next;
+            }
+          }
+        }
+
+        if (bestIdx < 0 || bestDrop <= 0) break;
+        const prev = adjustedDartScores[bestIdx];
+        adjustedDartScores[bestIdx] = bestNewScore;
+        finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
+        projectedAvg = projectedAvgFor(finalThrow);
+        adjustmentCount++;
+        console.log(`[BOT] Neighbor-adjust reduce: D${bestIdx + 1} ${prev} -> ${bestNewScore}`);
+      }
+
+      // Increase by pulling low neighboring singles back toward 20 (occasionally)
+      projectedAvg = projectedAvgFor(finalThrow);
+      if (projectedAvg < lowerAvg && Math.random() < 0.3) {
+        for (let idx = 0; idx < adjustedDartScores.length; idx++) {
+          const current = adjustedDartScores[idx];
+          const options = getIncreaseOptions(current);
+          if (options.length > 0) {
+            const next = options[0];
+            if (next > current) {
+              adjustedDartScores[idx] = next;
+              finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
+              console.log(`[BOT] Neighbor-adjust increase: D${idx + 1} ${current} -> ${next}`);
+              break;
+            }
+          }
         }
       }
     }
@@ -1352,9 +1485,7 @@ export default function GameScreen() {
     console.log(`[BOT TURN] Final throw: ${finalThrow}`);
     console.log(`========================================\n`);
     
-    // Only return dart breakdown if we didn't modify the total (otherwise it won't match)
-    const dartScores = wasModified ? [] : turnResult.darts.map(d => d.score);
-    return { totalScore: finalThrow, dartScores };
+    return { totalScore: finalThrow, dartScores: adjustedDartScores };
   };
 
   useEffect(() => {
@@ -1382,21 +1513,54 @@ export default function GameScreen() {
     return () => clearTimeout(timer);
   }, [currentPlayer, winner]);
 
-  // Handle back button
-  const navigation = useNavigation();
+  // Handle back button for web and mobile
+  const quitConfirmedRef = useRef(false);
+  const showQuitConfirmRef = useRef(false);
+
+  // Update ref when state changes
   useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
-      if (matchWinner) {
-        // Allow navigation if match is over
-        return;
-      }
-      // Prevent default behavior (going back)
-      e.preventDefault();
-      // Show quit confirmation
+    showQuitConfirmRef.current = showQuitConfirm;
+  }, [showQuitConfirm]);
+
+  // Reset quit state when screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      quitConfirmedRef.current = false;
+      showQuitConfirmRef.current = false;
+      setShowQuitConfirm(false);
+      return () => {};
+    }, [])
+  );
+
+  // Prevent removal during gameplay
+  const shouldPreventRemoval = !matchWinner && !winner && !quitConfirmedRef.current;
+  usePreventRemove(shouldPreventRemoval, ({ data }) => {
+    // This callback fires when user tries to navigate but removal is prevented
+    if (!showQuitConfirmRef.current) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setShowQuitConfirm(true);
+    }
+  });
+
+  // Mobile: Android/iOS hardware back button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (matchWinner || winner || quitConfirmedRef.current) {
+        return false; // Allow default back behavior if match is over or quit confirmed
+      }
+      // Show modal if not already shown
+      if (!showQuitConfirmRef.current) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        setShowQuitConfirm(true);
+      }
+      // Always prevent default back behavior during gameplay
+      return true;
     });
-    return unsubscribe;
-  }, [navigation, matchWinner]);
+
+    return () => {
+      backHandler.remove();
+    };
+  }, [matchWinner, winner]);
 
   const renderButton = (label: string, onPress: () => void, style?: any) => (
     <Button
@@ -2181,6 +2345,7 @@ export default function GameScreen() {
               <Button
                 mode="contained"
                 onPress={() => {
+                  quitConfirmedRef.current = true;
                   setShowQuitConfirm(false);
                   setTimeout(() => {
                     router.push('/screens/GameModesScreen');
