@@ -7,11 +7,11 @@ import axios, { AxiosInstance } from 'axios';
 import Constants from 'expo-constants';
 import { API_CONFIG } from '../config';
 
+
+
 // Configuration - adjust IP/port as needed for your local development
 const IS_WEB = typeof window !== 'undefined';
 const WEB_HOST = IS_WEB ? window.location.hostname : 'localhost';
-const STATIC_LAN_API_URL = 'http://10.226.144.244:8000';
-const API_HEALTH_TIMEOUT = 3000;
 
 function normalizeApiRoot(url: string | null | undefined): string | null {
   if (!url || typeof url !== 'string') return null;
@@ -48,9 +48,9 @@ const EXPLICIT_API_URL =
 const API_BASE_URL = EXPLICIT_API_URL || (
   IS_WEB
     ? (normalizeApiRoot(`http://${WEB_HOST}:8000`) || 'http://localhost:8000')
-    : (getExpoHostApiUrl() || STATIC_LAN_API_URL)
+    : (getExpoHostApiUrl() || 'http://localhost:8000')
 );
-const API_TIMEOUT = 15000; // Increased timeout for network requests
+const API_TIMEOUT = API_CONFIG.TIMEOUT;
 
 interface CheckoutRecommendation {
   best?: {
@@ -110,8 +110,6 @@ interface DoubleOutcomesResponse {
 
 class DartbotAPI {
   private api: AxiosInstance;
-  private readonly candidateBaseUrls: string[];
-  private resolveBaseUrlPromise: Promise<void> | null = null;
 
   constructor() {
     this.api = axios.create({
@@ -121,63 +119,6 @@ class DartbotAPI {
         'Content-Type': 'application/json',
       },
     });
-
-    const expoHostApiUrl = getExpoHostApiUrl();
-    const explicitApiUrl = EXPLICIT_API_URL;
-    this.candidateBaseUrls = Array.from(new Set([
-      explicitApiUrl,
-      API_BASE_URL,
-      expoHostApiUrl,
-      STATIC_LAN_API_URL,
-      'http://localhost:8000',
-      'http://127.0.0.1:8000',
-      'http://10.0.2.2:8000',
-    ].filter((url): url is string => Boolean(url))));
-
-    console.log('[API] Initial base URL:', this.api.defaults.baseURL);
-    console.log('[API] Candidate base URLs:', this.candidateBaseUrls.join(', '));
-
-    // Add error interceptor
-    this.api.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        console.error('API Error:', error.message);
-        throw error;
-      }
-    );
-  }
-
-  private async ensureReachableBaseURL(): Promise<void> {
-    if (this.resolveBaseUrlPromise) {
-      await this.resolveBaseUrlPromise;
-      return;
-    }
-
-    this.resolveBaseUrlPromise = (async () => {
-      for (const candidateUrl of this.candidateBaseUrls) {
-        try {
-          console.log(`[API] Probing candidate: ${candidateUrl}`);
-          const response = await axios.get(`${candidateUrl}/api/health`, { timeout: API_HEALTH_TIMEOUT });
-          if (response.status === 200) {
-            if (this.api.defaults.baseURL !== candidateUrl) {
-              console.log(`[API] Using reachable base URL: ${candidateUrl}`);
-            }
-            this.api.defaults.baseURL = candidateUrl;
-            return;
-          }
-        } catch {
-          console.warn(`[API] Candidate unreachable: ${candidateUrl}`);
-        }
-      }
-
-      console.warn(`[API] No reachable API base URL found. Keeping current base URL: ${this.api.defaults.baseURL}`);
-    })();
-
-    try {
-      await this.resolveBaseUrlPromise;
-    } finally {
-      this.resolveBaseUrlPromise = null;
-    }
   }
 
   /**
@@ -185,11 +126,9 @@ class DartbotAPI {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      await this.ensureReachableBaseURL();
       const response = await this.api.get('/api/health');
       return response.data.has_data === true;
-    } catch (error) {
-      console.warn('Health check failed:', error);
+    } catch {
       return false;
     }
   }
@@ -199,11 +138,9 @@ class DartbotAPI {
    */
   async getCheckoutBins(): Promise<string[]> {
     try {
-      await this.ensureReachableBaseURL();
       const response = await this.api.get<CheckoutBinsResponse>('/api/checkout/bins');
       return response.data.bins;
-    } catch (error) {
-      console.error('Failed to get checkout bins:', error);
+    } catch {
       return ['30-39', '40-49', '50-59']; // Fallback defaults
     }
   }
@@ -218,7 +155,6 @@ class DartbotAPI {
     averageRange: string = '30-39'
   ): Promise<CheckoutRecommendation | null> {
     try {
-      await this.ensureReachableBaseURL();
       const response = await this.api.post('/api/checkout/recommend', {
         score,
         average_range: averageRange,
@@ -228,8 +164,7 @@ class DartbotAPI {
         return response.data.recommendation;
       }
       return null;
-    } catch (error) {
-      console.error(`Failed to get checkout recommendation for score ${score}:`, error);
+    } catch {
       return null;
     }
   }
@@ -246,22 +181,17 @@ class DartbotAPI {
     dartsAvailable: number = 3
   ): Promise<{ segment: number; target?: string; reason: string; approach_play?: boolean; alternatives: Array<{ segment: number; target?: string; quality: number }> } | null> {
     try {
-      await this.ensureReachableBaseURL();
-      console.log(`[API] Calling /api/approach/suggest with score=${score}, outRule=${outRule}, dartsAvailable=${dartsAvailable}`);
       const response = await this.api.post('/api/approach/suggest', {
         score,
         out_rule: outRule,
         darts_available: dartsAvailable,
       });
 
-      console.log(`[API] Response received:`, response.data);
       if (response.data.segment !== undefined) {
         return response.data;
       }
-      console.warn(`[API] Response missing segment field:`, response.data);
       return null;
-    } catch (error) {
-      console.error(`Failed to get approach suggestion for score ${score}:`, error);
+    } catch {
       return null;
     }
   }
@@ -271,17 +201,12 @@ class DartbotAPI {
    */
   async getSimulationResults(): Promise<SimulationResultsResponse | null> {
     try {
-      await this.ensureReachableBaseURL();
-      console.log('[API] Fetching simulation results from ' + this.api.defaults.baseURL + '/api/simulation/results');
       const response = await this.api.get<SimulationResultsResponse>('/api/simulation/results');
-      console.log('[API] Simulation results received:', response.data);
       if (response.data && Object.keys(response.data).length > 0) {
         return response.data;
       }
-      console.warn('[API] Simulation results data is empty');
       return null;
-    } catch (error) {
-      console.error('Failed to get simulation results:', error);
+    } catch {
       return null;
     }
   }
@@ -291,17 +216,12 @@ class DartbotAPI {
    */
   async getDoubleOutcomes(): Promise<DoubleOutcomesResponse | null> {
     try {
-      await this.ensureReachableBaseURL();
-      console.log('[API] Fetching double outcomes from ' + this.api.defaults.baseURL + '/api/double/outcomes');
       const response = await this.api.get<DoubleOutcomesResponse>('/api/double/outcomes');
-      console.log('[API] Double outcomes received:', response.data);
       if (response.data && Object.keys(response.data).length > 0) {
         return response.data;
       }
-      console.warn('[API] Double outcomes data is empty');
       return null;
-    } catch (error) {
-      console.error('Failed to get double outcomes:', error);
+    } catch {
       return null;
     }
   }
@@ -320,7 +240,6 @@ class DartbotAPI {
     averageRange: string = '30-39'
   ): Promise<BotStrategyResponse | null> {
     try {
-      await this.ensureReachableBaseURL();
       const response = await this.api.post<BotStrategyResponse>('/api/bot/strategy', {
         level,
         current_score: currentScore,
@@ -329,8 +248,7 @@ class DartbotAPI {
       });
 
       return response.data;
-    } catch (error) {
-      console.error('Failed to get bot strategy:', error);
+    } catch {
       return null;
     }
   }

@@ -37,6 +37,36 @@ const SINGLE_DART_FINISHES = new Set([
   2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 50
 ]);
 
+const IMPOSSIBLE_CHECKOUT_SCORES = new Set([1, 159, 162, 163, 165, 166, 168, 169]);
+
+function formatCheckoutTokenForDisplay(token: string): string {
+  const normalized = token.trim().toLowerCase();
+  if (!normalized) return '';
+
+  if (normalized === 'ibull') return 'Bull';
+  if (normalized === 'obull') return '25';
+
+  const tripleMatch = normalized.match(/^t(\d{1,2})$/);
+  if (tripleMatch) return `T${parseInt(tripleMatch[1], 10)}`;
+
+  const doubleMatch = normalized.match(/^d(\d{1,2})$/);
+  if (doubleMatch) return `D${parseInt(doubleMatch[1], 10)}`;
+
+  const singleMatch = normalized.match(/^[sio](\d{1,2})$/);
+  if (singleMatch) return `S${parseInt(singleMatch[1], 10)}`;
+
+  return normalized.toUpperCase();
+}
+
+function formatCheckoutSequenceForDisplay(sequence: string | null): string {
+  if (!sequence) return '';
+  return sequence
+    .split(',')
+    .map((token) => formatCheckoutTokenForDisplay(token))
+    .filter(Boolean)
+    .join('  ');
+}
+
 /**
  * Calculate fallback quality for a checkout route
  * Higher score = better fallback (if treble is missed and becomes single)
@@ -303,6 +333,43 @@ export default function GameScreen() {
   const [currentDarts, setCurrentDarts] = useState<Dart[]>([]);
   type Multiplier = 1 | 2 | 3;
   const [selectedMultiplier, setSelectedMultiplier] = useState<Multiplier>(1);
+  const [userCheckoutDisplay, setUserCheckoutDisplay] = useState<string>('');
+  const [botCheckoutDisplay, setBotCheckoutDisplay] = useState<string>('');
+  const checkoutDisplayCacheRef = useRef<Map<string, string>>(new Map());
+
+  useEffect(() => {
+    let isActive = true;
+
+    const averageRange = getAverageRangeForLevel(level);
+
+    const getDisplayForScore = async (score: number): Promise<string> => {
+      if (score < 2 || score > 170 || IMPOSSIBLE_CHECKOUT_SCORES.has(score)) {
+        return '';
+      }
+
+      const cacheKey = `${averageRange}:${score}`;
+      const cached = checkoutDisplayCacheRef.current.get(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
+
+      const recommendation = await dartbotAPI.getCheckoutRecommendation(score, averageRange);
+      const firstSequence = recommendation?.all_candidates?.[0] ?? recommendation?.best?.sequence ?? null;
+      const formatted = formatCheckoutSequenceForDisplay(firstSequence);
+      checkoutDisplayCacheRef.current.set(cacheKey, formatted);
+      return formatted;
+    };
+
+    Promise.all([getDisplayForScore(userScore), getDisplayForScore(botScore)]).then(([userDisplay, botDisplay]) => {
+      if (!isActive) return;
+      setUserCheckoutDisplay(userDisplay);
+      setBotCheckoutDisplay(botDisplay);
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [userScore, botScore, level]);
 
   const handleNumberPress = (num: string) => {
     if (winner || currentPlayer === 'dartbot') return;
@@ -564,6 +631,16 @@ export default function GameScreen() {
     }
 
     const isCheckoutEligible = (score: number) => score >= 2 && score <= 170 && !noCheckout.includes(score);
+
+    // In double-out, a scored 0 can still represent darts thrown at a checkout attempt.
+    // Prompt for darts-at-double for any valid checkout score (2-170, excluding impossible).
+    if (player === 'user' && needsDouble && throwScore === 0 && isCheckoutEligible(scoreBefore)) {
+      logUserTurn(0);
+      setPendingThrow(0);
+      setScoreBeforeDoublePrompt(scoreBefore);
+      setShowDoublePrompt(true);
+      return;
+    }
 
     // Bust if overshoot
     if (throwScore > scoreBefore) {
@@ -909,8 +986,13 @@ export default function GameScreen() {
     const isSpecialPrompt = specialPromptScores.includes(score);
 
     return {
-      // For 100,101,104,107,110 and odd < 40: allow 2 or 3 darts to checkout
-      dartsOptions: (isOddUnder40 || isSpecialPrompt || isUnder98) ? ['2', '3'] : ['1', '2'],
+      // For even 2-40: allow 1,2,3 darts to checkout
+      // For 100,101,104,107,110, odd < 40, and 41-97: allow 2 or 3 darts
+      dartsOptions: isEvenBetween2And40
+        ? ['1', '2', '3']
+        : (isOddUnder40 || isSpecialPrompt || isUnder98)
+          ? ['2', '3']
+          : ['1', '2'],
       // For even 2-40, odd < 40, and special prompts: allow 1,2,3 darts at double; for 41-98: allow 1,2; for 99,101+: allow 0,1,2,3
       doublesOptions: (isEvenBetween2And40) ? ['1', '2', '3'] : (isUnder98 || isOddUnder40 || isSpecialPrompt) ? ['1', '2'] : ['2', '3'],
     };
@@ -1621,12 +1703,18 @@ export default function GameScreen() {
         <View style={styles.scoreRow}>
           <View style={[styles.scoreCard, { backgroundColor: theme.colors.surfaceVariant, borderColor: currentPlayer === 'user' ? theme.colors.primary : theme.colors.outline }]}>
             <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>You</Text>
+            <Text variant="labelSmall" style={[styles.checkoutHintText, { color: theme.colors.onSurfaceVariant }]}>
+              {userCheckoutDisplay || '—'}
+            </Text>
             <Text variant="headlineMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 2 }}>
               {userScore}
             </Text>
           </View>
           <View style={[styles.scoreCard, { backgroundColor: theme.colors.surfaceVariant, borderColor: currentPlayer === 'dartbot' ? theme.colors.primary : theme.colors.outline }]}>
             <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>Dartbot ({level})</Text>
+            <Text variant="labelSmall" style={[styles.checkoutHintText, { color: theme.colors.onSurfaceVariant }]}>
+              {botCheckoutDisplay || '—'}
+            </Text>
             <Text variant="headlineMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 2 }}>
               {botScore}
             </Text>
@@ -2395,6 +2483,11 @@ const styles = StyleSheet.create({
         elevation: 4,
       },
     }),
+  },
+  checkoutHintText: {
+    marginTop: 2,
+    minHeight: 16,
+    fontWeight: '700',
   },
   display: {
     padding: 10,
