@@ -5,7 +5,10 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect, usePreventRemove } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { dartbotAPI } from '../../services/dartbotAPI';
+import { recordH2HResult } from '../../services/h2hRecord';
 import { simulateBotTurn, simulateDartAtTarget, parseCheckoutTarget, getAverageRangeForLevel, setSimulationResults, setAverageRangeForSimulation, setDoubleOutcomesResults, applyIntendedHitVariance } from '../../utils/dartGameIntegration';
+import { recordCompletedMatchUserStats } from '../../services/allTimeStats';
+import { getPlayerName } from '../../services/playerProfile';
 
 /**
  * Count the number of darts in a checkout sequence
@@ -175,6 +178,7 @@ export default function GameScreen() {
   const params = useLocalSearchParams();
 
   type Player = 'user' | 'dartbot';
+  type MatchWinner = Player | 'draw';
 
   const startingScore = useMemo(() => {
     const parsed = parseInt(params.startingScore as string, 10);
@@ -195,7 +199,9 @@ export default function GameScreen() {
   const [inputScore, setInputScore] = useState<string>('0');
   const [status, setStatus] = useState<string>('Enter your score');
   const [winner, setWinner] = useState<Player | null>(null);
-  const [matchWinner, setMatchWinner] = useState<Player | null>(null);
+  const [matchWinner, setMatchWinner] = useState<MatchWinner | null>(null);
+  const [playerName, setPlayerName] = useState<string>('Player');
+  const matchResultSavedRef = useRef(false);
   const [,setBotThinking] = useState<boolean>(false);
 
   useEffect(() => {
@@ -215,7 +221,20 @@ export default function GameScreen() {
     };
   }, [level]);
 
+  useEffect(() => {
+    let isActive = true;
+    getPlayerName().then((name) => {
+      if (!isActive) return;
+      setPlayerName(name);
+    });
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
   // Leg/Set tracking
+  const isEvenBestOf = formatType === 'Best Of' && formatNumber % 2 === 0;
+
   const requiredToWin = useMemo(() => {
     if (formatType === 'Best Of') {
       // For "Best Of" formats (legs or sets), you need a majority:
@@ -229,6 +248,8 @@ export default function GameScreen() {
   const [userLegsWon, setUserLegsWon] = useState<number>(0);
   const [botLegsWon, setBotLegsWon] = useState<number>(0);
   const [currentLegNumber, setCurrentLegNumber] = useState<number>(1);
+  const [totalLegsPlayed, setTotalLegsPlayed] = useState<number>(0);
+  const totalLegsPlayedRef = useRef(0);
   
   // Sets tracking
   const [userSetsWon, setUserSetsWon] = useState<number>(0);
@@ -263,6 +284,27 @@ export default function GameScreen() {
   const [userHighestFinish, setUserHighestFinish] = useState<number>(0);
   const [botHighestFinish, setBotHighestFinish] = useState<number>(0);
 
+  useEffect(() => {
+    if (!matchWinner || matchResultSavedRef.current) return;
+
+    matchResultSavedRef.current = true;
+    const outcome: 'userWin' | 'botWin' | 'draw' = matchWinner === 'user' ? 'userWin' : matchWinner === 'dartbot' ? 'botWin' : 'draw';
+    
+    Promise.all([
+      recordH2HResult(outcome),
+      recordCompletedMatchUserStats({
+        userThrows,
+        cumulativeCheckoutAttempts: cumulativeDoubleAttempts,
+        cumulativeCheckoutSuccess,
+        userHighestFinish,
+        userBestLeg,
+        legsPlayed: totalLegsPlayedRef.current,
+      }),
+    ]).catch((error) => {
+      console.error('Failed to persist match records:', error);
+    });
+  }, [matchWinner]);
+
   // Double In stats
   const [hasHitDoubleIn, setHasHitDoubleIn] = useState<boolean>(false);
   const [doubleInAttempts, setDoubleInAttempts] = useState<number>(0);
@@ -285,6 +327,7 @@ export default function GameScreen() {
     doubleAttempts: number;
     userLegsWon: number;
     botLegsWon: number;
+    totalLegsPlayed: number;
     userSetsWon: number;
     botSetsWon: number;
     cumulativeDoubleAttempts: number;
@@ -311,7 +354,7 @@ export default function GameScreen() {
 
   // State to store checkout score for modal options
   const [checkoutScore, setCheckoutScore] = useState<number>(0);
-  // State to store pending throw while double prompt is open
+  // State to store pending throw while prompt is open
   const [pendingThrow, setPendingThrow] = useState<number | null>(null);
   // State to track score before double prompt for conditional options
   const [scoreBeforeDoublePrompt, setScoreBeforeDoublePrompt] = useState<number>(0);
@@ -405,6 +448,8 @@ export default function GameScreen() {
     setCurrentDarts(currentDarts.slice(0, -1));
   };
 
+
+
   const handlePerDartConfirm = () => {
     if (currentDarts.length === 0) return;
     const totalScore = currentDarts.reduce((sum, dart) => sum + (dart.value * dart.multiplier), 0);
@@ -435,13 +480,62 @@ export default function GameScreen() {
 
   const isValidThrow = (val: number) => val >= 0 && val <= 180 && ![179, 178, 176, 175, 173, 172, 169, 166, 163].includes(val);
 
+  /**
+   * Build turn details from throws array with score progression
+   * Reconstructs the game flow to show remaining scores
+   */
   // Handle leg completion and reset for next leg
   const handleLegWin = (legWinner: Player) => {
     const newUserLegsWon = legWinner === 'user' ? userLegsWon + 1 : userLegsWon;
     const newBotLegsWon = legWinner === 'dartbot' ? botLegsWon + 1 : botLegsWon;
+    const newTotalLegsPlayed = totalLegsPlayed + 1;
+    totalLegsPlayedRef.current = newTotalLegsPlayed;
+    setTotalLegsPlayed(newTotalLegsPlayed);
 
     // If playing Legs format (not Sets), check if match is won
     if (legOrSet === 'Legs') {
+      if (isEvenBestOf) {
+        const totalLegsPlayed = newUserLegsWon + newBotLegsWon;
+        if (totalLegsPlayed >= formatNumber) {
+          setUserLegsWon(newUserLegsWon);
+          setBotLegsWon(newBotLegsWon);
+          if (newUserLegsWon > newBotLegsWon) {
+            setMatchWinner('user');
+          } else if (newBotLegsWon > newUserLegsWon) {
+            setMatchWinner('dartbot');
+          } else {
+            setMatchWinner('draw');
+          }
+          setShowQuitConfirm(true);
+          return;
+        }
+
+        setUserLegsWon(newUserLegsWon);
+        setBotLegsWon(newBotLegsWon);
+        setCurrentLegNumber((prev) => prev + 1);
+        setUserScore(startingScore);
+        setBotScore(startingScore);
+        setWinner(null);
+        setInputScore('0');
+        setHasHitDoubleIn(false);
+        setUserCheckoutDarts(null);
+        setUserCheckoutDoubles(null);
+        setBotCheckoutDarts(null);
+        setBotCheckoutDoubles(null);
+        const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
+        setCurrentPlayer(nextFirstPlayer);
+        setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
+        setUserThrows((current) => {
+          setCurrentLegStartIndex(current.length);
+          return current;
+        });
+        setBotThrows((current) => {
+          setBotCurrentLegStartIndex(current.length);
+          return current;
+        });
+        return;
+      }
+
       if (newUserLegsWon >= requiredToWin || newBotLegsWon >= requiredToWin) {
         setUserLegsWon(newUserLegsWon);
         setBotLegsWon(newBotLegsWon);
@@ -466,7 +560,7 @@ export default function GameScreen() {
       // Alternate first player for next leg
       const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
       setCurrentPlayer(nextFirstPlayer);
-      setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
+      setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
       // Use functional updates to get current array lengths (not stale closure values)
       setUserThrows((current) => {
         setCurrentLegStartIndex(current.length);
@@ -486,6 +580,25 @@ export default function GameScreen() {
       const newBotSetsWon = newBotLegsWon >= legsToWinSet ? botSetsWon + 1 : botSetsWon;
 
       // Check if match is over (based on required sets to win)
+      if (isEvenBestOf) {
+        const totalSetsPlayed = newUserSetsWon + newBotSetsWon;
+        if (totalSetsPlayed >= formatNumber) {
+          setUserLegsWon(newUserLegsWon);
+          setBotLegsWon(newBotLegsWon);
+          setUserSetsWon(newUserSetsWon);
+          setBotSetsWon(newBotSetsWon);
+          if (newUserSetsWon > newBotSetsWon) {
+            setMatchWinner('user');
+          } else if (newBotSetsWon > newUserSetsWon) {
+            setMatchWinner('dartbot');
+          } else {
+            setMatchWinner('draw');
+          }
+          setShowQuitConfirm(true);
+          return;
+        }
+      }
+
       if (newUserSetsWon >= requiredToWin || newBotSetsWon >= requiredToWin) {
         setUserLegsWon(newUserLegsWon);
         setBotLegsWon(newBotLegsWon);
@@ -515,7 +628,7 @@ export default function GameScreen() {
       // Alternate first player for next set
       const nextFirstPlayer = initialFirstPlayer === 'user' ? (newUserSetsWon % 2 === 0 ? 'user' : 'dartbot') : (newUserSetsWon % 2 === 0 ? 'dartbot' : 'user');
       setCurrentPlayer(nextFirstPlayer);
-      setStatus(`Set ${newUserSetsWon + newBotSetsWon} won! Starting Leg 1 of Set ${newUserSetsWon + newBotSetsWon + 1}. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
+      setStatus(`Set ${newUserSetsWon + newBotSetsWon} won! Starting Leg 1 of Set ${newUserSetsWon + newBotSetsWon + 1}. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
       // Use functional updates to get current array lengths (not stale closure values)
       setUserThrows((current) => {
         setCurrentLegStartIndex(current.length);
@@ -545,7 +658,7 @@ export default function GameScreen() {
     // Alternate first player for next leg - swap who threw first each leg
     const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
     setCurrentPlayer(nextFirstPlayer);
-    setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? 'You' : 'Dartbot'} throws first.`);
+    setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
     // Mark where the next leg starts for per-leg calculations
     // Use functional updates to get current array lengths (not stale closure values)
     setUserThrows((current) => {
@@ -581,6 +694,7 @@ export default function GameScreen() {
         doubleAttempts,
         userLegsWon,
         botLegsWon,
+        totalLegsPlayed,
         userSetsWon,
         botSetsWon,
         cumulativeDoubleAttempts,
@@ -711,7 +825,7 @@ export default function GameScreen() {
             return currentThrows;
           });
           setWinner('user');
-          setStatus('You win this leg!');
+          setStatus(`${playerName} wins this leg!`);
           // Handle leg win after a short delay to show the win message
           setTimeout(() => handleLegWin('user'), 1000);
         } else {
@@ -742,7 +856,7 @@ export default function GameScreen() {
               return currentThrows;
             });
             setWinner('user');
-            setStatus('You win this leg!');
+            setStatus(`${playerName} wins this leg!`);
             // Handle leg win after a short delay to show the win message
             setTimeout(() => handleLegWin('user'), 1000);
           } else {
@@ -792,7 +906,7 @@ export default function GameScreen() {
         // For straight out, no need for double prompt - just update score
         if (outRule !== 'double') {
           setUserScore(newScore);
-          setStatus(`You scored ${throwScore}. Next throw: Dartbot.`);
+          setStatus(`${playerName} scored ${throwScore}. Next throw: Dartbot.`);
           setCurrentPlayer('dartbot');
         } else {
           // Double out: prompt whenever at 50 or below (and above 0) - defer score update until confirmed
@@ -803,7 +917,7 @@ export default function GameScreen() {
             return; // Don't transition to dartbot yet
           } else {
             setUserScore(newScore);
-            setStatus(`You scored ${throwScore}. Next throw: Dartbot.`);
+            setStatus(`${playerName} scored ${throwScore}. Next throw: Dartbot.`);
             setCurrentPlayer('dartbot');
           }
         }
@@ -813,7 +927,7 @@ export default function GameScreen() {
         const dartBreakdownMsg = dartScores && dartScores.length > 0 
           ? ` (${dartScores.map((s, i) => `D${i+1}:${s}`).join(', ')})` 
           : '';
-        setStatus(`Dartbot scored ${throwScore}${dartBreakdownMsg}. Next throw: You.`);
+        setStatus(`Dartbot scored ${throwScore}${dartBreakdownMsg}. Next throw: ${playerName}.`);
         setCurrentPlayer('user');
       }
     }
@@ -852,6 +966,8 @@ export default function GameScreen() {
       setDoubleAttempts(targetState.doubleAttempts);
       setUserLegsWon(targetState.userLegsWon);
       setBotLegsWon(targetState.botLegsWon);
+      totalLegsPlayedRef.current = targetState.totalLegsPlayed;
+      setTotalLegsPlayed(targetState.totalLegsPlayed);
       setUserSetsWon(targetState.userSetsWon);
       setBotSetsWon(targetState.botSetsWon);
       setCumulativeDoubleAttempts(targetState.cumulativeDoubleAttempts);
@@ -928,7 +1044,7 @@ export default function GameScreen() {
       }
       
       setWinner('user');
-      setStatus('You win this leg!');
+      setStatus(`${playerName} wins this leg!`);
       // Handle leg win after a short delay to show the win message
       setTimeout(() => handleLegWin('user'), 1000);
     }
@@ -1644,7 +1760,7 @@ export default function GameScreen() {
             )}
             {matchWinner && (
               <Text variant="labelSmall" style={{ color: theme.colors.onSurfaceVariant, marginTop: 3, fontWeight: 'bold', textAlign: 'center' }}>
-                {matchWinner === 'user' ? 'YOU WIN!' : 'BOT WINS!'}
+                {matchWinner === 'user' ? `${playerName.toUpperCase()} WINS!` : matchWinner === 'dartbot' ? 'BOT WINS!' : 'DRAW!'}
               </Text>
             )}
           </View>
@@ -1661,7 +1777,7 @@ export default function GameScreen() {
         {/* Scoreboard */}
         <View style={styles.scoreRow}>
           <View style={[styles.scoreCard, { backgroundColor: theme.colors.surfaceVariant, borderColor: currentPlayer === 'user' ? theme.colors.primary : theme.colors.outline }]}>
-            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>You</Text>
+            <Text variant="labelMedium" style={{ color: theme.colors.onSurfaceVariant }}>{playerName}</Text>
             <Text variant="labelSmall" style={[styles.checkoutHintText, { color: theme.colors.onSurfaceVariant }]}>
               {userCheckoutDisplay || '—'}
             </Text>
@@ -1700,10 +1816,10 @@ export default function GameScreen() {
           {scoringMode === 'keypad' ? (
             <>
               <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, marginBottom: 6 }}>
-                {winner ? 'Game Over' : currentPlayer === 'user' ? 'Your turn' : 'Dartbot thinking...'}
+                {winner ? 'Game Over' : currentPlayer === 'user' ? `${playerName}'s turn` : 'Dartbot thinking...'}
               </Text>
               <Text variant="displayLarge" style={{ color: theme.colors.onSurfaceVariant }}>
-                {winner ? (winner === 'user' ? 'You win!' : 'Dartbot wins!') : inputScore || '0'}
+                {winner ? (winner === 'user' ? `${playerName} wins!` : 'Dartbot wins!') : inputScore || '0'}
               </Text>
               <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, marginTop: 6 }}>
                 {status}
@@ -1712,7 +1828,7 @@ export default function GameScreen() {
           ) : (
             <>
               <Text variant="titleMedium" style={{ color: theme.colors.onSurfaceVariant, marginBottom: 6 }}>
-                {winner ? 'Game Over' : currentPlayer === 'user' ? 'Your turn' : 'Dartbot thinking...'}
+                {winner ? 'Game Over' : currentPlayer === 'user' ? `${playerName}'s turn` : 'Dartbot thinking...'}
               </Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 8 }}>
                 {currentDarts.map((dart, index) => (
@@ -2107,10 +2223,10 @@ export default function GameScreen() {
                 {outRule === 'double' ? 'DOUBLE OUT' : 'STRAIGHT OUT'}
               </Text>
               <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 4 }}>
-                Sets: You {userSetsWon} - {botSetsWon} Dartbot ({level})
+                Sets: {playerName} {userSetsWon} - {botSetsWon} Dartbot ({level})
               </Text>
               <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginTop: 2 }}>
-                Current: Set {userSetsWon + botSetsWon + 1}, Leg {currentLegNumber} • Legs: You {userLegsWon} - {botLegsWon} Dartbot ({level})
+                Current: Set {userSetsWon + botSetsWon + 1}, Leg {currentLegNumber} • Legs: {playerName} {userLegsWon} - {botLegsWon} Dartbot ({level})
               </Text>
             </View>
 
@@ -2118,7 +2234,7 @@ export default function GameScreen() {
             <View style={styles.statsTable}>
               {/* Header Row */}
               <View style={styles.statsRow}>
-                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>You</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{playerName}</Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}> </Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot ({level})</Text>
               </View>
@@ -2208,7 +2324,7 @@ export default function GameScreen() {
             <View style={styles.statsTable}>
               {/* Header Row */}
               <View style={styles.statsRow}>
-                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>User</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{playerName}</Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Score Range</Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot ({level})</Text>
               </View>
@@ -2271,7 +2387,7 @@ export default function GameScreen() {
             {/* Final Result Header */}
             <View style={{ backgroundColor: theme.colors.primary, padding: 16, borderRadius: 12, marginBottom: 16, alignItems: 'center' }}>
               <Text variant="displaySmall" style={{ color: theme.colors.onPrimary, fontWeight: 'bold', marginBottom: 8 }}>
-                {matchWinner === 'user' ? '🎉 YOU WIN! 🎉' : '💪 DARTBOT WINS 💪'}
+                {matchWinner === 'user' ? `🎉 ${playerName.toUpperCase()} WINS! 🎉` : matchWinner === 'dartbot' ? '💪 DARTBOT WINS 💪' : '🤝 DRAW 🤝'}
               </Text>
               <Text variant="headlineSmall" style={{ color: theme.colors.onPrimary, marginTop: 8 }}>
                 {gameFormat}
@@ -2294,7 +2410,7 @@ export default function GameScreen() {
             <View style={styles.statsTable}>
               {/* Header Row */}
               <View style={styles.statsRow}>
-                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>You</Text>
+                <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{playerName}</Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}> </Text>
                 <Text variant="titleSmall" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>Dartbot ({level})</Text>
               </View>
@@ -2379,7 +2495,7 @@ export default function GameScreen() {
         <View style={[styles.modalOverlay, { backgroundColor: `${theme.colors.background}E6` }]}>
           <View style={[styles.modalContent, { backgroundColor: theme.colors.background }]}>
             <Text variant="headlineSmall" style={{ color: theme.colors.onBackground, marginBottom: 24, textAlign: 'center' }}>
-              Do you want to quit this match?
+              {playerName}, do you want to quit this match?
             </Text>
             <View style={{ flexDirection: 'row', gap: 12 }}>
               <Button

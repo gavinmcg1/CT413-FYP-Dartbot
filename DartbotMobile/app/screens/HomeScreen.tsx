@@ -1,10 +1,9 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollView, View, Platform } from 'react-native';
-import { Card, Text, useTheme } from 'react-native-paper';
+import { Button, Card, Text, TextInput, useTheme } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
-
-//const API_BASE_URL = 'http://192.168.1.100:5000/api';
+import { getPlayerName, setPlayerName } from '../../services/playerProfile';
 
 const gameModes = [
   {
@@ -27,20 +26,78 @@ const gameModes = [
 export default function HomeScreen() {
   const router = useRouter();
   const theme = useTheme();
+  const [playerName, setPlayerNameState] = useState('Player');
+  const [nameInput, setNameInput] = useState('Player');
+  const [isEditingName, setIsEditingName] = useState(true);
+
+  useEffect(() => {
+    let isActive = true;
+    getPlayerName().then((name) => {
+      if (!isActive) return;
+      setPlayerNameState(name);
+      setNameInput(name);
+      setIsEditingName(name === 'Player');
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   const handleSelectMode = (modeId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (modeId === 'record') {
+      router.push('/screens/H2HRecordScreen');
+      return;
+    }
+    if (modeId === 'stats') {
+      router.push('/screens/StatisticsScreen');
+      return;
+    }
     router.push({ pathname: '/screens/GameSetupScreen', params: { modeId } });
   };
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }}>
-      <View style={{ padding: 24, paddingTop: 40, marginBottom: 20 }}>
+      <View style={{ padding: 24, paddingTop: 40, marginBottom: 20, position: 'relative' }}>
+        <View style={{ position: 'absolute', top: 40, right: 24, width: 150 }}>
+          {isEditingName ? (
+            <>
+              <TextInput
+                mode="outlined"
+                dense
+                label="Name"
+                value={nameInput}
+                onChangeText={setNameInput}
+                maxLength={24}
+              />
+              <Button
+                compact
+                mode="contained"
+                style={{ marginTop: 6, borderRadius: 8 }}
+                onPress={async () => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  const saved = await setPlayerName(nameInput);
+                  setPlayerNameState(saved);
+                  setNameInput(saved);
+                  setIsEditingName(false);
+                }}
+              >
+                Save
+              </Button>
+            </>
+          ) : (
+            <Button compact mode="outlined" onPress={() => setIsEditingName(true)}>
+              {playerName}
+            </Button>
+          )}
+        </View>
+
         <Text variant="displaySmall" style={{ fontWeight: 'bold', marginBottom: 8, color: theme.colors.primary }}>
           Dartbot
         </Text>
         <Text variant="bodyLarge" style={{ color: theme.colors.onSurfaceVariant, lineHeight: 24 }}>
-          An AI Bot you can play against across different darts games
+          Welcome, {playerName}
         </Text>
       </View>
 
