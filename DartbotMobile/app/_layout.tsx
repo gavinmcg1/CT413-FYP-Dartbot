@@ -28,7 +28,6 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
           <Stack.Screen name="screens/HomeScreen" options={{ headerShown: false, title: 'Home' }} />
-          <Stack.Screen name="screens/GameModesScreen" options={{ title: 'Game Modes', headerLargeTitle: true }} />
           <Stack.Screen name="screens/GameSetupScreen" options={{ title: 'Game Setup', headerLargeTitle: true }} />
           <Stack.Screen name="screens/GameSettingsScreen" options={{ title: 'Game Settings', headerLargeTitle: true }} />
           <Stack.Screen name="screens/CoinFlipScreen" options={{ title: 'Coin Flip', headerLargeTitle: true }} />

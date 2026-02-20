@@ -5,7 +5,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useFocusEffect, usePreventRemove } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { dartbotAPI } from '../../services/dartbotAPI';
-import { simulateBotTurn, simulateDartAtTarget, parseCheckoutTarget, getAverageRangeForLevel, getT20HitProbability, getBotCheckoutProbability, formatBotDarts, setSimulationResults, setAverageRangeForSimulation, setDoubleOutcomesResults, applyIntendedHitVariance } from '../../utils/dartGameIntegration';
+import { simulateBotTurn, simulateDartAtTarget, parseCheckoutTarget, getAverageRangeForLevel, setSimulationResults, setAverageRangeForSimulation, setDoubleOutcomesResults, applyIntendedHitVariance } from '../../utils/dartGameIntegration';
 
 /**
  * Count the number of darts in a checkout sequence
@@ -405,15 +405,9 @@ export default function GameScreen() {
     setCurrentDarts(currentDarts.slice(0, -1));
   };
 
-  // State to track the last dart's multiplier for checkout validation
-  const [lastDartMultiplier, setLastDartMultiplier] = useState<1 | 2 | 3>(1);
-
   const handlePerDartConfirm = () => {
     if (currentDarts.length === 0) return;
     const totalScore = currentDarts.reduce((sum, dart) => sum + (dart.value * dart.multiplier), 0);
-    // Track the last dart's multiplier for finishing validation
-    const lastDartMult = currentDarts[currentDarts.length - 1].multiplier;
-    setLastDartMultiplier(lastDartMult);
     setCurrentDarts([]);
     handleSubmit(totalScore);
   };
@@ -435,10 +429,6 @@ export default function GameScreen() {
       return;
     }
     
-    // For keypad mode, use selectedMultiplier; for per-dart mode, lastDartMultiplier is already set
-    if (scoringMode === 'keypad') {
-      setLastDartMultiplier(selectedMultiplier);
-    }
     applyThrow('user', score);
     setInputScore('0');
   };
@@ -720,7 +710,6 @@ export default function GameScreen() {
             );
             return currentThrows;
           });
-          setLastDartMultiplier(1); // Reset for next leg
           setWinner('user');
           setStatus('You win this leg!');
           // Handle leg win after a short delay to show the win message
@@ -752,7 +741,6 @@ export default function GameScreen() {
               );
               return currentThrows;
             });
-            setLastDartMultiplier(1); // Reset for next leg
             setWinner('user');
             setStatus('You win this leg!');
             // Handle leg win after a short delay to show the win message
@@ -792,7 +780,6 @@ export default function GameScreen() {
         if (throwScore > botHighestFinish) {
           setBotHighestFinish(throwScore);
         }
-        setLastDartMultiplier(1); // Reset for next leg
         setWinner(player);
         setStatus(`Dartbot wins this leg!`);
         // Handle leg win after a short delay to show the win message
@@ -967,9 +954,6 @@ export default function GameScreen() {
       
       // Apply the pending throw now that double in is confirmed
       if (pendingThrow !== null) {
-        if (scoringMode === 'keypad') {
-          setLastDartMultiplier(selectedMultiplier);
-        }
         applyThrow('user', pendingThrow);
         setPendingThrow(null);
         setInputScore('0');
@@ -1152,8 +1136,6 @@ export default function GameScreen() {
       ? Math.max(0, turns - 1) * 3 + botCheckoutDarts
       : turns * 3;
     const currentLegTotal = currentLegThrows.reduce((a, b) => a + b, 0);
-    const currentThreeDartAvg = dartsInCurrentLeg > 0 ? (currentLegTotal / dartsInCurrentLeg) * 3 : 0;
-
     // Dynamically choose targets per dart based on live score (checkout vs approach)
     if (remainingScore <= 170) {
       console.log(`[BOT] Entering checkout range (score <= 170)`);
@@ -1171,11 +1153,6 @@ export default function GameScreen() {
       let turnScore = 0;
       let finished = false;
       let doublesAttempted = 0;
-      let doublesHit = 0;
-      let checkoutSequence: string[] = [];
-      let sequenceIndex = 0; // Track position in the checkout sequence
-      let followingSequence = false; // Whether we're actively following a sequence
-
         console.log(`[BOT] Starting turn at ${remainingScore}`);
 
         let resultAlreadySet = false;
@@ -1212,11 +1189,6 @@ export default function GameScreen() {
             targetToken = oneDartFinish;
             isFromSequence = true; // One-dart finishes are calculated, not random fallback
             console.log(`[BOT] Can finish ${scoreLeft} with one dart! Aiming at ${targetToken}`);
-          } else if (followingSequence && sequenceIndex < checkoutSequence.length) {
-            // Continue following the original checkout sequence
-            targetToken = checkoutSequence[sequenceIndex];
-            isFromSequence = true;
-            console.log(`[BOT] Following sequence (dart ${sequenceIndex + 1}/${checkoutSequence.length}): ${targetToken} from [${checkoutSequence.join(',')}]`);
           } else if (scoreLeft <= 170) {
             console.log(`[BOT] Route: scoreLeft <= 170, calling checkout API...`);
             // Call API for checkout if remaining score is 170 or below (in checkout_candidates.json)
@@ -1326,7 +1298,7 @@ export default function GameScreen() {
           // Also skip variance when API explicitly indicates power scoring mode.
           const intendedWithVariance = (isFromSequence || !shouldApplyVariance) ? intended : (
             !(outRule === 'double' && scoreLeft <= 60)
-              ? applyIntendedHitVariance(intended, level, scoreLeft)
+                ? applyIntendedHitVariance(intended, level)
               : intended
           );
 
@@ -1381,26 +1353,8 @@ export default function GameScreen() {
             `[BOT] Dart ${i + 1}: Score left=${scoreLeft}, Aiming at=${intendedWithVariance} (${(dart.hitProbability * 100).toFixed(1)}% hit chance), Hit=${dart.actual}, Score=${dart.score}, Success=${dart.actualHit ? '✓' : '✗'}`
           );
           
-          // Track if double was hit (only for finishing attempts)
-          if (isAimingAtDouble && canFinishOnDouble && dart.actual && dart.actual[0] === 'D') {
-            doublesHit++;
-          }
-
           const newTurnScore = turnScore + dart.score;
           console.log(`[BOT] Turn total so far: ${turnScore} + ${dart.score} = ${newTurnScore}, Remaining would be: ${remainingScore - newTurnScore}`);
-          
-          // Update sequence tracking: advance if we hit the intended target, otherwise stop following
-          if (followingSequence) {
-            if (dart.actualHit) {
-              // Successfully hit the intended target, advance to next in sequence
-              sequenceIndex++;
-              console.log(`[BOT] Advanced sequence to dart ${sequenceIndex + 1}/${checkoutSequence.length}`);
-            } else {
-              // Missed the intended target, abandon sequence and recalculate on next dart
-              followingSequence = false;
-              console.log(`[BOT] Missed target, abandoning sequence for recalculation`);
-            }
-          }
           
           if (newTurnScore > remainingScore) {
             console.log(`[BOT] BUST! Scored ${newTurnScore} > ${remainingScore}`);
@@ -1509,45 +1463,56 @@ export default function GameScreen() {
     let adjustedDartScores = turnResult.darts.map((d) => d.score);
     let finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
 
-    if (!usedRoutingSimulation && !isAttemptingCheckout && finalThrow > 0 && turns > 0) {
+    if (!isAttemptingCheckout && finalThrow > 0) {
       const projectedNewDarts = dartsInCurrentLeg + 3;
       const upperAvg = targetAvg * 1.25;
       const lowerAvg = targetAvg * 0.75;
       const projectedAvgFor = (total: number) => ((currentLegTotal + total) / projectedNewDarts) * 3;
+      const maxDartChanges = 2;
+      let dartChanges = 0;
 
       // Reduce by moving dart scores to neighboring/lower outcomes
       let projectedAvg = projectedAvgFor(finalThrow);
-      let adjustmentCount = 0;
-      while (projectedAvg > upperAvg && adjustmentCount < 6) {
+      while (projectedAvg > upperAvg && dartChanges < maxDartChanges) {
         let bestIdx = -1;
         let bestNewScore = -1;
         let bestDrop = 0;
+        let shouldUseRandomS20Split = false;
 
         for (let idx = 0; idx < adjustedDartScores.length; idx++) {
           const current = adjustedDartScores[idx];
           const options = getReduceOptions(current);
           for (const next of options) {
+            // Keep T20 reductions realistic: allow 60 -> 20 often, but not always.
+            if (current === 60 && next === 20 && Math.random() < 0.35) {
+              continue;
+            }
             const drop = current - next;
             if (drop > bestDrop) {
               bestDrop = drop;
               bestIdx = idx;
               bestNewScore = next;
+              shouldUseRandomS20Split = current === 20;
             }
           }
         }
 
         if (bestIdx < 0 || bestDrop <= 0) break;
         const prev = adjustedDartScores[bestIdx];
+        if (shouldUseRandomS20Split && prev === 20) {
+          const splitRoll = Math.random();
+          bestNewScore = splitRoll < 0.5 ? 1 : 5;
+        }
         adjustedDartScores[bestIdx] = bestNewScore;
         finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
         projectedAvg = projectedAvgFor(finalThrow);
-        adjustmentCount++;
+        dartChanges++;
         console.log(`[BOT] Neighbor-adjust reduce: D${bestIdx + 1} ${prev} -> ${bestNewScore}`);
       }
 
       // Increase by pulling low neighboring singles back toward 20 (occasionally)
       projectedAvg = projectedAvgFor(finalThrow);
-      if (projectedAvg < lowerAvg && Math.random() < 0.3) {
+      if (projectedAvg < lowerAvg && dartChanges < maxDartChanges && Math.random() < 0.3) {
         for (let idx = 0; idx < adjustedDartScores.length; idx++) {
           const current = adjustedDartScores[idx];
           const options = getIncreaseOptions(current);
@@ -1556,6 +1521,7 @@ export default function GameScreen() {
             if (next > current) {
               adjustedDartScores[idx] = next;
               finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
+              dartChanges++;
               console.log(`[BOT] Neighbor-adjust increase: D${idx + 1} ${current} -> ${next}`);
               break;
             }
@@ -1576,13 +1542,6 @@ export default function GameScreen() {
     setBotThinking(true);
     const timer = setTimeout(async () => {
       const { totalScore: botThrow, dartScores } = await generateBotThrow();
-      // For bot finishing throws in double out, assume it hits a double
-      if (botThrow === botScore && outRule === 'double' && botThrow <= 170 && botThrow % 2 === 0) {
-        setLastDartMultiplier(2);
-      } else {
-        setLastDartMultiplier(1);
-      }
-      
       // Show individual dart scores in status if available
       if (dartScores.length > 0) {
         const dartBreakdown = dartScores.map((score, idx) => `D${idx + 1}: ${score}`).join(', ');
@@ -1616,7 +1575,7 @@ export default function GameScreen() {
 
   // Prevent removal during gameplay
   const shouldPreventRemoval = !matchWinner && !winner && !quitConfirmedRef.current;
-  usePreventRemove(shouldPreventRemoval, ({ data }) => {
+  usePreventRemove(shouldPreventRemoval, () => {
     // This callback fires when user tries to navigate but removal is prevented
     if (!showQuitConfirmRef.current) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -2403,7 +2362,7 @@ export default function GameScreen() {
                 onPress={() => {
                   setShowQuitConfirm(false);
                   setTimeout(() => {
-                    router.push('/screens/GameModesScreen');
+                    router.push('/screens/HomeScreen');
                   }, 100);
                 }}
                 style={{ flex: 1 }}
@@ -2436,7 +2395,7 @@ export default function GameScreen() {
                   quitConfirmedRef.current = true;
                   setShowQuitConfirm(false);
                   setTimeout(() => {
-                    router.push('/screens/GameModesScreen');
+                    router.push('/screens/HomeScreen');
                   }, 100);
                 }}
                 buttonColor={theme.colors.error}
@@ -2576,9 +2535,6 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: '#444',
     minHeight: 36,
-  },
-  dartTableHeader: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
   dartTableButton: {
     margin: 0,

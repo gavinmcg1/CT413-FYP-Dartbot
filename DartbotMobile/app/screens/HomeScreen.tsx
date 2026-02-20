@@ -1,18 +1,36 @@
 import React from 'react';
 import { ScrollView, View, Platform } from 'react-native';
-import { Button, Text, useTheme } from 'react-native-paper';
+import { Card, Text, useTheme } from 'react-native-paper';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
 //const API_BASE_URL = 'http://192.168.1.100:5000/api';
 
+const gameModes = [
+  {
+    id: 'standardGame',
+    title: 'Standard Game',
+    description: 'Classic X01 darts game - race to zero',
+  },
+  {
+    id: 'record',
+    title: 'H2H Record',
+    description: 'View your head-to-head record against the AI',
+  },
+  {
+    id: 'stats',
+    title: 'Statistics',
+    description: 'View your game statistics and performance',
+  },
+];
+
 export default function HomeScreen() {
   const router = useRouter();
   const theme = useTheme();
 
-  const handleStartGame = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    router.push('/screens/GameModesScreen');
+  const handleSelectMode = (modeId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    router.push({ pathname: '/screens/GameSetupScreen', params: { modeId } });
   };
 
   return (
@@ -26,26 +44,38 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      <View style={{ paddingHorizontal: 16, paddingTop: 20 }}>
-        <Button
-          mode="contained"
-          onPress={handleStartGame}
-          style={{ 
-            paddingVertical: 8, 
-            borderRadius: 14,
-            ...Platform.select({
-              ios: {
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.2,
-                shadowRadius: 8,
-              },
-            }),
-          }}
-          labelStyle={{ fontSize: 18, fontWeight: '600' }}
-        >
-          Start Game
-        </Button>
+      <View style={{ padding: 12 }}>
+        <Text variant="headlineSmall" style={{ fontWeight: 'bold', marginBottom: 10, paddingHorizontal: 4 }}>
+          Select Game Mode
+        </Text>
+        {gameModes.map((mode) => (
+          <Card
+            key={mode.id}
+            style={{
+              marginBottom: 12,
+              borderRadius: 16,
+              ...Platform.select({
+                ios: {
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 8,
+                },
+                android: { elevation: 3 },
+              }),
+            }}
+            onPress={() => handleSelectMode(mode.id)}
+          >
+            <Card.Content>
+              <Text variant="titleLarge" style={{ fontWeight: 'bold', marginBottom: 6 }}>
+                {mode.title}
+              </Text>
+              <Text variant="bodyMedium" style={{ color: theme.colors.onSurfaceVariant }}>
+                {mode.description}
+              </Text>
+            </Card.Content>
+          </Card>
+        ))}
       </View>
     </ScrollView>
   );

@@ -3,7 +3,7 @@
  * Data-driven bot using empirical miss distributions and skill-based accuracy
  */
 
-import { Target, getNextSegment, getPrevSegment } from './dartPhysics';
+import { Target, getNextSegment, getPrevSegment } from '@/utils/dartPhysics';
 
 /**
  * Empirical miss distribution when T20 is missed
@@ -150,32 +150,6 @@ function getT20BaseHitProbability(): number {
   
   console.warn('[T20HitProb] Simulation data not available, using fallback probability');
   return 0.5; // Default 50% hit rate as fallback
-}
-
-/**
- * Get hit probability for T20 based on skill level
- * Uses empirical data from simulation results loaded via API
- * Applies skill-based scaling: low skill significantly reduced, high skill kept/increased
- * NOTE: Only T20 gets this scaling. Other targets use the unscaled base.
- */
-export function getT20HitProbability(skillLevel: number): number {
-  const baseProb = getT20BaseHitProbability();
-  
-  // Apply skill-based scaling to the API probability
-  // Low skill (1-8): significantly reduced accuracy for consistency
-  // High skill (14-18): kept at API level or slightly boosted
-  const skillFactor = (skillLevel - 1) / 17; // 0 to 1
-  
-  // Non-linear skill curve that heavily penalizes low skill
-  // Skill 1: ~40% of API probability
-  // Skill 5: ~55% of API probability
-  // Skill 9: ~75% of API probability
-  // Skill 14: ~90% of API probability
-  // Skill 18: ~105% of API probability
-  const skillMultiplier = 0.40 + (skillFactor * 0.65);
-  
-  const scaledProb = baseProb * skillMultiplier;
-  return Math.max(0.02, Math.min(0.98, scaledProb));
 }
 
 /**
@@ -354,8 +328,7 @@ function getVarianceProbabilityForLevel(skillLevel: number): number {
  */
 export function applyIntendedHitVariance(
   recommendedTarget: Target,
-  skillLevel: number,
-  remainingScore: number
+  skillLevel: number
 ): Target {
   // Get variance probability for this skill level
   const varianceProbability = getVarianceProbabilityForLevel(skillLevel);
@@ -494,10 +467,14 @@ function sampleMissDestinationForSegment(
     if (segment === 50) {
       const innerBullOutcome = getInnerBullOutcome();
       if (innerBullOutcome) {
-        const inside = Math.max(0, innerBullOutcome.miss_inside ?? 0);
+        const insideRaw = Math.max(0, innerBullOutcome.miss_inside ?? 0);
         const outside = Math.max(0, innerBullOutcome.miss_outside ?? 0);
         const neighbor = Math.max(0, innerBullOutcome.neighbor_singledouble ?? 0);
         const other = Math.max(0, innerBullOutcome.other ?? 0);
+        // Low levels should miss outer bull less often and drift to random singles more.
+        // L1 keeps ~35% of empirical inside weight; L18 keeps 100%.
+        const insideWeightBySkill = 0.35 + (0.65 * skillFactor);
+        const inside = insideRaw * insideWeightBySkill;
         const total = inside + outside + neighbor + other;
 
         if (total > 0) {
@@ -510,8 +487,9 @@ function sampleMissDestinationForSegment(
       }
 
       // Skill-based chance to hit outer bull on miss
-      // Skill 1: 15% chance to hit obull, Skill 18: 40% chance
-      const obullChance = 0.15 + (skillFactor * 0.25);
+      // Low levels should hit outer bull less often on miss.
+      // Skill 1: 5% chance, Skill 18: 25% chance
+      const obullChance = 0.05 + (skillFactor * 0.20);
       const missRoll = Math.random();
       
       if (missRoll < obullChance) {
@@ -648,7 +626,6 @@ function calculateMarkerBonus(
   if (!previousDart) return 1.0; // First dart, no bonus
   
   const intendedMult = intended[0];
-  const intendedSegment = parseInt(intended.slice(1), 10);
   
   // Scenario 1: Aiming at double, previous missed completely off board (0 points)
   // Visual marker to aim at - real darts phenomenon
@@ -779,7 +756,7 @@ export function simulateBotTurn(
   // Simulate up to 3 darts
   for (let i = 0; i < 3; i++) {
     const baseTarget = 'T20' as Target;
-    const intendedTarget = applyIntendedHitVariance(baseTarget, skillLevel, remainingScore);
+    const intendedTarget = applyIntendedHitVariance(baseTarget, skillLevel);
     const previousDart = i > 0 ? darts[i - 1] : null;
     const dart = simulateSingleDart(skillLevel, intendedTarget, undefined, false, previousDart);
     darts.push(dart);
@@ -836,61 +813,6 @@ export function simulateBotTurn(
     totalScore: turnScore,
     finished: false,
   };
-}
-
-/**
- * Simulate a checkout turn using a specific recommended route
- * Each dart follows the intended sequence; actual hits/misses still apply
- */
-export function simulateCheckoutTurn(
-  skillLevel: number,
-  remainingScore: number,
-  outRule: 'straight' | 'double',
-  sequence: string[] | string
-): {
-  darts: BotDartThrow[];
-  totalScore: number;
-  finished: boolean;
-} {
-  const seq = Array.isArray(sequence) ? sequence : sequence.split('|');
-  const darts: BotDartThrow[] = [];
-  let turnScore = 0;
-
-  for (let i = 0; i < 3; i++) {
-    const intended = parseCheckoutTarget(seq[i] ?? 't20');
-    const previousDart = i > 0 ? darts[i - 1] : null;
-    const dart = simulateSingleDart(skillLevel, intended, undefined, false, previousDart);
-    darts.push(dart);
-
-    const newTurnScore = turnScore + dart.score;
-    if (newTurnScore > remainingScore) {
-      return { darts, totalScore: 0, finished: false };
-    }
-    turnScore = newTurnScore;
-
-    if (newTurnScore === remainingScore) {
-      if (outRule === 'double') {
-        const isDouble = dart.actual && dart.actual[0] === 'D';
-        if (!isDouble) return { darts, totalScore: 0, finished: false };
-      }
-      return { darts, totalScore: turnScore, finished: true };
-    }
-
-    if (outRule === 'double' && newTurnScore === remainingScore - 1) {
-      return { darts, totalScore: 0, finished: false };
-    }
-  }
-
-  return { darts, totalScore: turnScore, finished: false };
-}
-
-/**
- * Format bot dart throws for display
- */
-export function formatBotDarts(darts: BotDartThrow[]): string {
-  return darts
-    .map((dart) => `${dart.intended}->${dart.actual || 'MISS'}(${dart.actualHit ? '✓' : '✗'}) +${dart.score}`)
-    .join(' | ');
 }
 
 /**
@@ -956,14 +878,3 @@ export function parseCheckoutTarget(input: string): Target {
   }
 }
 
-/**
- * Get checkout probability (unused for now, simplified approach)
- */
-export function getBotCheckoutProbability(
-  score: number,
-  skillLevel: number,
-  outRule: 'straight' | 'double'
-): number {
-  const hitProb = getT20HitProbability(skillLevel);
-  return Math.pow(hitProb, 2); // Roughly 2 T20s to finish
-}

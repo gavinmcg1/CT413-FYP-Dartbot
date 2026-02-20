@@ -83,11 +83,6 @@ interface BotStrategyResponse {
   };
 }
 
-interface CheckoutBinsResponse {
-  bins: string[];
-  count: number;
-}
-
 interface SimulationResultsResponse {
   model?: {
     slope: number;
@@ -130,18 +125,6 @@ class DartbotAPI {
       return response.data.has_data === true;
     } catch {
       return false;
-    }
-  }
-
-  /**
-   * Get all available checkout average bins
-   */
-  async getCheckoutBins(): Promise<string[]> {
-    try {
-      const response = await this.api.get<CheckoutBinsResponse>('/api/checkout/bins');
-      return response.data.bins;
-    } catch {
-      return ['30-39', '40-49', '50-59']; // Fallback defaults
     }
   }
 
@@ -253,19 +236,6 @@ class DartbotAPI {
     }
   }
 
-  /**
-   * Set the API base URL (useful for dynamic configuration)
-   */
-  setBaseURL(url: string): void {
-    this.api.defaults.baseURL = url;
-  }
-
-  /**
-   * Get the current base URL
-   */
-  getBaseURL(): string {
-    return this.api.defaults.baseURL || API_BASE_URL;
-  }
 }
 
 // Export singleton instance
