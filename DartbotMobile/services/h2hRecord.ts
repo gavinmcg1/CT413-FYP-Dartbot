@@ -77,9 +77,7 @@ export async function getH2HRecord(): Promise<H2HRecord> {
   }
 }
 
-/**
- * Get all match history details
- */
+  // Get all match history details
 export async function getMatchHistory(): Promise<MatchDetail[]> {
   try {
     const raw = await AsyncStorage.getItem(MATCH_HISTORY_KEY);
@@ -116,9 +114,7 @@ export async function recordH2HResult(outcome: H2HOutcome): Promise<H2HRecord> {
   return next;
 }
 
-/**
- * Record a complete match with leg-by-leg breakdown
- */
+ // Record a complete match with leg-by-leg breakdown
 export async function recordMatchDetail(match: MatchDetail): Promise<void> {
   try {
     const history = await getMatchHistory();

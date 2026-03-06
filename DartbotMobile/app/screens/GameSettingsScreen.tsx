@@ -17,6 +17,7 @@ export default function GameSettingsScreen() {
   const [matchValue, setMatchValue] = useState<string>('3');
   const [inRule, setInRule] = useState<string>('straight');
   const [outRule, setOutRule] = useState<string>('double');
+  const [pressureMode, setPressureMode] = useState<string>('on');
 
   const handleContinue = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -37,6 +38,7 @@ export default function GameSettingsScreen() {
       inRule,
       outRule,
       level: botLevel, // Pass through from GameSetupScreen
+      pressureMode,
     };
     console.log('Game settings:', settings);
     // Navigate to coin flip screen
@@ -48,7 +50,11 @@ export default function GameSettingsScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
-      <View style={{ flex: 1, padding: 12, gap: 10 }}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: 12, gap: 10, paddingBottom: 24, flexGrow: 1 }}
+        showsVerticalScrollIndicator
+      >
         <Card style={{
           borderRadius: 18,
           ...Platform.select({
@@ -211,7 +217,35 @@ export default function GameSettingsScreen() {
           </Card.Content>
         </Card>
 
-        <View style={{ flexDirection: 'row', gap: 10, marginTop: 'auto' }}>
+        <Card style={{
+          borderRadius: 18,
+          ...Platform.select({
+            ios: {
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.12,
+              shadowRadius: 12,
+            },
+            android: { elevation: 4 },
+          }),
+        }}>
+          <Card.Content>
+            <Text variant="titleMedium" style={{ fontWeight: 'bold', marginBottom: 12 }}>
+              Pressure Model
+            </Text>
+            <SegmentedButtons
+              value={pressureMode}
+              onValueChange={setPressureMode}
+              style={{ marginBottom: 4 }}
+              buttons={[
+                { value: 'off', label: 'Off' },
+                { value: 'on', label: 'On' },
+              ]}
+            />
+          </Card.Content>
+        </Card>
+
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
           <Button
             mode="text"
             onPress={() => router.back()}
@@ -228,7 +262,7 @@ export default function GameSettingsScreen() {
             Continue
           </Button>
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }

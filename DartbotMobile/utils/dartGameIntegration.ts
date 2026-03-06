@@ -10,32 +10,17 @@ import { Target, getNextSegment, getPrevSegment } from '@/utils/dartPhysics';
  * Based on real darts data
  */
 const DEFAULT_EMPIRICAL_MISS_DIST: Record<string, number> = {
-  i20: 0.34700665188470065,
-  o5: 0.04434589800443459,
-  o20: 0.33148558758314856,
-  t5: 0.019955654101995565,
-  i5: 0.05321507760532151,
-  t1: 0.028824833702882482,
-  bounceout: 0.009977827050997782,
-  i1: 0.05432372505543237,
-  o12: 0.007760532150776054,
-  o1: 0.04434589800443459,
-  i9: 0.004434589800443459,
-  i12: 0.013303769401330377,
-  i14: 0.0033259423503325942,
-  i11: 0.0022172949002217295,
-  i18: 0.005543237250554324,
-  t12: 0.0022172949002217295,
-  i4: 0.0066518847006651885,
-  i8: 0.0022172949002217295,
-  o18: 0.004434589800443459,
-  d1: 0.0011086474501108647,
-  o6: 0.0011086474501108647,
-  t18: 0.0022172949002217295,
-  obull: 0.0011086474501108647,
-  m20: 0.004434589800443459,
-  d20: 0.0022172949002217295,
-  d5: 0.0022172949002217295,
+  i20: 0.35,
+  o20: 0.31,
+  i5: 0.07,
+  o5: 0.06,
+  i1: 0.07,
+  o1: 0.06,
+  t5: 0.02,
+  t1: 0.02,
+  m20: 0.015,
+  bounceout: 0.015,
+  obull: 0.01,
 };
 
 type SimulationResultsData = {
@@ -48,7 +33,7 @@ type DoubleOutcomeEntry = {
   hit_double?: number;
   miss_inside?: number;
   miss_outside?: number;
-  neighbor_singledouble?: number;
+  neighbour_singledouble?: number;
   other?: number;
   samples?: number;
 };
@@ -149,7 +134,7 @@ function getT20BaseHitProbability(): number {
   }
   
   console.warn('[T20HitProb] Simulation data not available, using fallback probability');
-  return 0.5; // Default 50% hit rate as fallback
+  return 0.2; // Default 20% hit rate as fallback
 }
 
 /**
@@ -185,14 +170,11 @@ function getS20HitProbability(skillLevel: number): number {
  * Get hit probability for a specific target based on skill and multiplier
  * Low-skill: frequent T20 misses, struggle with doubles, hit singles often
  * High-skill: consistent T20 hits, excellent doubles, singles are misses
- * 
- * NOTE: Uses BASE (unscaled) API probability for calculating multipliers,
- * but T20 itself uses the skill-scaled probability
  */
 function getTargetHitProbability(skillLevel: number, target: Target): number {
   if (target === 'S20') return getS20HitProbability(skillLevel);
   
-  // Use the UNSCALED base API probability for calculating other targets
+  // Use the unscaled base API probability for calculating other targets
   // This prevents double-reduction where skill penalty applies twice
   const base = getT20BaseHitProbability();
   const mult = target[0];
@@ -233,14 +215,14 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
     }
 
     // Fallback curve if ibull data is unavailable
-    // Skill 1 ≈ 0.5%, Skill 10 ≈ 3.5%, Skill 18 ≈ 6.5%
+    // Skill 1 ~ 0.5%, Skill 10 ~ 3.5%, Skill 18 ~ 6.5%
     const s50Probability = 0.005 + (skillFactor * 0.060);
     return Math.max(0.003, Math.min(0.08, s50Probability));
   }
   
   // S25 = outer bull (larger than inner, but still small)
   // Keep lower than standard singles, but higher than inner bull.
-  // Skill 1 ≈ 6%, Skill 10 ≈ 14.5%, Skill 18 ≈ 22%
+  // Skill 1 ~ 6%, Skill 10 ~ 14.5%, Skill 18 ~ 22%
   if (target === 'S25') {
     const s25Probability = 0.06 + (skillFactor * 0.16);
     return Math.max(0.03, Math.min(0.22, s25Probability));
@@ -254,7 +236,7 @@ function getTargetHitProbability(skillLevel: number, target: Target): number {
   
   // Doubles: High-skill players are MUCH BETTER at doubles
   // Doubles require precision and are the skill differentiator at checkout
-  // Applied to UNSCALED base so high-skill gets full advantage
+  // Applied to unscaled base so high-skill gets full advantage
   // Low skill: 0.30x (terrible at doubles), High skill: 1.45x (excellent at doubles)
   if (mult === 'D') {
     const lowLevelDoublePenaltyByLevel: Record<number, number> = {
@@ -353,7 +335,7 @@ export function applyIntendedHitVariance(
       const mult = recommendedTarget[0];
       const segment = parseInt(recommendedTarget.slice(1), 10);
 
-      // Try adjacent segments (neighbors on dartboard)
+      // Try adjacent segments (neighbours on dartboard)
       const adjacentRoll = Math.random();
       let newSegment = segment;
 
@@ -378,7 +360,7 @@ function getMissDistribution(skillLevel: number = 10): Record<string, number> {
   const binDist = currentAverageRange && simulationResults?.bins?.[currentAverageRange]?.miss_bed_distribution;
   const baseDist = binDist || simulationResults?.empirical_miss_dist || DEFAULT_EMPIRICAL_MISS_DIST;
   
-  // For high-skill players, filter out far misses (1's, low segments)
+  // For high-skill players, filter out far misses
   // Keep close misses (i20, o20, t5, o5, i5, t1, i1)
   const skillFactor = (skillLevel - 1) / 17; // 0 to 1
   
@@ -388,10 +370,10 @@ function getMissDistribution(skillLevel: number = 10): Record<string, number> {
   }
 
   // High skill: reweight and renormalize
-  // At top levels, misses should cluster around 20 and only rarely drift to neighboring singles.
+  // At top levels, misses should cluster around 20 and only rarely drift to neighbouring singles.
   const core20Beds = new Set(['i20', 'o20', 'd20', 'm20']);
-  const neighborTripleBeds = new Set(['t5', 't1']);
-  const neighborSingleBeds = new Set(['i5', 'o5', 'i1', 'o1']);
+  const neighbourTripleBeds = new Set(['t5', 't1']);
+  const neighbourSingleBeds = new Set(['i5', 'o5', 'i1', 'o1']);
   const bounceBeds = new Set(['bounceout']);
   const filtered: Record<string, number> = {};
   let total = 0;
@@ -403,17 +385,17 @@ function getMissDistribution(skillLevel: number = 10): Record<string, number> {
     if (core20Beds.has(bed)) {
       // Boost center-20 misses as skill rises
       weight = 1 + (1.2 * skillFactor);
-    } else if (neighborTripleBeds.has(bed)) {
-      // Keep some near-neighbor triples
+    } else if (neighbourTripleBeds.has(bed)) {
+      // Keep some near-neighbour triples
       weight = 0.45 - (0.15 * skillFactor);
-    } else if (neighborSingleBeds.has(bed)) {
-      // Strongly suppress neighboring singles at high levels
+    } else if (neighbourSingleBeds.has(bed)) {
+      // Strongly suppress neighbouring singles at high levels
       // L18 ~18% of original weight
       weight = 0.55 - (0.37 * skillFactor);
     } else if (bounceBeds.has(bed)) {
       weight = 0.18 - (0.08 * skillFactor);
     } else {
-      // Far misses decay steeply with skill
+      // Far misses decrease steeply with skill
       weight = 0.40 - (0.35 * skillFactor);
     }
 
@@ -448,7 +430,7 @@ function sampleMissDestination(skillLevel: number = 10): Target | null {
 
 /**
  * Sample a miss destination around a target segment
- * For segment 20, use empirical data; otherwise use neighboring singles
+ * For segment 20, use empirical data; otherwise use neighbouring singles
  * Special handling for bulls (50 and 25) with skill-based probabilities for IBULL only
  */
 function sampleMissDestinationForSegment(
@@ -469,13 +451,13 @@ function sampleMissDestinationForSegment(
       if (innerBullOutcome) {
         const insideRaw = Math.max(0, innerBullOutcome.miss_inside ?? 0);
         const outside = Math.max(0, innerBullOutcome.miss_outside ?? 0);
-        const neighbor = Math.max(0, innerBullOutcome.neighbor_singledouble ?? 0);
+        const neighbour = Math.max(0, innerBullOutcome.neighbour_singledouble ?? 0);
         const other = Math.max(0, innerBullOutcome.other ?? 0);
         // Low levels should miss outer bull less often and drift to random singles more.
         // L1 keeps ~35% of empirical inside weight; L18 keeps 100%.
         const insideWeightBySkill = 0.35 + (0.65 * skillFactor);
         const inside = insideRaw * insideWeightBySkill;
-        const total = inside + outside + neighbor + other;
+        const total = inside + outside + neighbour + other;
 
         if (total > 0) {
           const roll = Math.random() * total;
@@ -502,7 +484,7 @@ function sampleMissDestinationForSegment(
       }
     }
     
-    // When missing outer bull (25), fixed 5% chance to hit inner bull instead (all skill levels)"
+    // When missing outer bull (25), fixed 5% chance to hit inner bull instead (all skill levels)
     if (segment === 25) {
       // Fixed 5% chance to hit inner bull on miss (all skill levels)
       const missRoll = Math.random();
@@ -521,21 +503,42 @@ function sampleMissDestinationForSegment(
     return sampleMissDestination(skillLevel) ?? ('S20' as Target);
   }
 
+  // When aiming at a single on non-20 segments, allow ring misses that can
+  // accidentally hit the double/treble of the same number (especially at lower levels).
+  if (!isBullTarget && intendedMult === 'S') {
+    const clampedLevel = Math.max(1, Math.min(18, skillLevel));
+    const t = (clampedLevel - 1) / 17; // 0 at L1, 1 at L18
+
+    const sameSingle = 0.62 + (0.30 * t);
+    const sameDouble = 0.16 + (-0.12 * t);
+    const sameTreble = 0.10 + (-0.08 * t);
+    const prevSingle = 0.06 + (-0.05 * t);
+
+    const roll = Math.random();
+    if (roll < sameSingle) return `S${segment}` as Target;
+    if (roll < sameSingle + sameDouble) return `D${segment}` as Target;
+    if (roll < sameSingle + sameDouble + sameTreble) return `T${segment}` as Target;
+    if (roll < sameSingle + sameDouble + sameTreble + prevSingle) {
+      return `S${getPrevSegment(segment)}` as Target;
+    }
+    return `S${getNextSegment(segment)}` as Target;
+  }
+
   // For double attempts (D1-D20), allow some misses outside the board (no score)
   if (!isBullTarget && intendedMult === 'D') {
     const doubleOutcome = getDoubleOutcomeForSegment(segment);
     if (doubleOutcome) {
       const outside = Math.max(0, doubleOutcome.miss_outside ?? 0);
       const same = Math.max(0, doubleOutcome.miss_inside ?? 0);
-      const neighbor = Math.max(0, doubleOutcome.neighbor_singledouble ?? 0);
+      const neighbour = Math.max(0, doubleOutcome.neighbour_singledouble ?? 0);
       const other = Math.max(0, doubleOutcome.other ?? 0);
-      const total = outside + same + neighbor + other;
+      const total = outside + same + neighbour + other;
 
       if (total > 0) {
         const roll = Math.random() * total;
         if (roll < outside) return null;
         if (roll < outside + same) return `S${segment}` as Target;
-        if (roll < outside + same + neighbor) {
+        if (roll < outside + same + neighbour) {
           return Math.random() < 0.5
             ? (`S${getPrevSegment(segment)}` as Target)
             : (`S${getNextSegment(segment)}` as Target);
@@ -559,7 +562,6 @@ function sampleMissDestinationForSegment(
     const outside = 0.5892857143 + (0.0607142857 * t);
     const same = 0.2935714286 + (0.0364285714 * t);
     const prev = 0.0585714286 + (-0.0485714286 * t);
-    const next = 0.0585714286 + (-0.0485714286 * t);
 
     const roll = Math.random();
     if (roll < outside) return null;
@@ -569,7 +571,7 @@ function sampleMissDestinationForSegment(
   }
 
   // For low-level triple attempts in checkout routes (e.g., T18/T17 setups),
-  // make neighboring singles more likely than same-segment single.
+  // make neighbouring singles more likely than same-segment single.
   if (!isBullTarget && intendedMult === 'T' && skillLevel <= 4) {
     const lowLevelTripleMissProfile: Record<number, { same: number; prev: number; next: number }> = {
       1: { same: 0.42, prev: 0.29, next: 0.29 },
@@ -590,7 +592,6 @@ function sampleMissDestinationForSegment(
   const skillFactor = (skillLevel - 1) / 17; // 0 to 1
   const same = 0.60 + (0.38 * skillFactor);
   const prev = 0.20 + (-0.19 * skillFactor);
-  const next = 0.20 + (-0.19 * skillFactor);
 
   const roll = Math.random();
   if (roll < same) return `S${segment}` as Target;
@@ -598,9 +599,8 @@ function sampleMissDestinationForSegment(
   return `S${getNextSegment(segment)}` as Target;
 }
 
-/**
- * Single dart result
- */
+
+ // Single dart result
 export interface BotDartThrow {
   intended: Target;
   actual: Target | null;
@@ -628,10 +628,10 @@ function calculateMarkerBonus(
   const intendedMult = intended[0];
   
   // Scenario 1: Aiming at double, previous missed completely off board (0 points)
-  // Visual marker to aim at - real darts phenomenon
+  // Visual marker to aim at - real darts scenario
   if (intendedMult === 'D' && previousDart.intended[0] === 'D') {
     // Check if previous dart missed the board completely (actual === null, score = 0)
-    // This gives a visual marker (the dart sticking in the wall/floor) to aim from
+    // This gives a visual marker (the dart sticking near the target) to aim for
     if (previousDart.actual === null && previousDart.score === 0) {
       // Lower low-level bonus while keeping high-level ceiling:
       // L1: +5%, L4: ~+9.8%, L18: +32%
@@ -646,7 +646,7 @@ function calculateMarkerBonus(
   if (skillLevel >= 13 && intended === 'T20' && previousDart.intended === 'T20') {
     // Check if previous actually hit T20
     if (previousDart.actual === 'T20' && previousDart.actualHit) {
-      // Only active for level 13+ players
+      // Only active for level 13+ players, lower levels tend to be less composed in this scenario
       const skillFactor = (skillLevel - 1) / 17; // 0 to 1
       const bonusMultiplier = 1.10 + (skillFactor * 0.20);
       return bonusMultiplier;
@@ -689,7 +689,7 @@ function simulateSingleDart(
     };
   }
 
-  // Miss - use empirical distribution for segment 20, otherwise neighbors
+  // Miss - use empirical distribution for segment 20, otherwise neighbours
   const segmentMatch = intended.match(/^([SDT])(\d+)$/);
   const segment = segmentMatch ? parseInt(segmentMatch[2], 10) : 20;
   const intendedMult = segmentMatch ? (segmentMatch[1] as 'S' | 'D' | 'T') : 'S';
@@ -721,9 +721,7 @@ export function simulateDartAtTarget(
   return simulateSingleDart(skillLevel, intended, overrideHitChance, isCheckoutSetup, previousDart);
 }
 
-/**
- * Calculate score from target
- */
+  // Calculate score from target
 function calculateScore(target: Target | null): number {
   if (!target) return 0;
 
@@ -843,9 +841,7 @@ export function getAverageRangeForLevel(level: number): string {
   return levelAverages[level] ?? '60-69';
 }
 
-/**
- * Parse checkout sequence entry to Target
- */
+ // Parse checkout sequence entry to Target
 export function parseCheckoutTarget(input: string): Target {
   const bed = input.toLowerCase();
   if (bed === 'ibull') return 'S50' as Target;

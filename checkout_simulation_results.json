@@ -3471,21 +3471,19 @@
           },
           {
             "sequence": [
-              "o15",
-              "i10",
-              "d18"
+              "o11",
+              "ibull"
             ],
-            "success_prob": 0.06038422718349665,
+            "success_prob": 0.08041781890056666,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "i15",
-              "i10",
-              "d18"
+              "i11",
+              "ibull"
             ],
-            "success_prob": 0.06038422718349665,
+            "success_prob": 0.08041781890056666,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -6080,20 +6078,21 @@
           },
           {
             "sequence": [
-              "i20",
+              "o16",
               "t16",
-              "d18"
+              "d20"
             ],
-            "success_prob": 0.05232847137104707,
+            "success_prob": 0.0620519920605537,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "t18",
-              "ibull"
+              "i20",
+              "t16",
+              "d18"
             ],
-            "success_prob": 0.06190430544392747,
+            "success_prob": 0.05232847137104707,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -6466,11 +6465,10 @@
           },
           {
             "sequence": [
-              "i20",
-              "d20",
+              "t20",
               "ibull"
             ],
-            "success_prob": 0.0506482593633285,
+            "success_prob": 0.06956793941114445,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -12482,21 +12480,19 @@
           },
           {
             "sequence": [
-              "o15",
-              "o10",
-              "d18"
+              "o11",
+              "ibull"
             ],
-            "success_prob": 0.06816441492798936,
+            "success_prob": 0.09033790008244576,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "o15",
-              "i10",
-              "d18"
+              "i11",
+              "ibull"
             ],
-            "success_prob": 0.06816441492798936,
+            "success_prob": 0.09033790008244576,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -15089,21 +15085,21 @@
           },
           {
             "sequence": [
-              "i20",
+              "o16",
               "t16",
-              "d18"
+              "d20"
             ],
-            "success_prob": 0.0587835417922714,
+            "success_prob": 0.0620519920605537,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
+              "i20",
               "t16",
-              "i16",
-              "d20"
+              "d18"
             ],
-            "success_prob": 0.05632509466422954,
+            "success_prob": 0.0587835417922714,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -15476,11 +15472,10 @@
           },
           {
             "sequence": [
-              "i20",
-              "d20",
+              "t20",
               "ibull"
             ],
-            "success_prob": 0.05349024897091834,
+            "success_prob": 0.06956793941114445,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -21492,21 +21487,19 @@
           },
           {
             "sequence": [
-              "o15",
-              "i10",
-              "d18"
+              "o11",
+              "ibull"
             ],
-            "success_prob": 0.07724859412989804,
+            "success_prob": 0.10025798126432484,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "i15",
-              "i10",
-              "d18"
+              "i11",
+              "ibull"
             ],
-            "success_prob": 0.07724859412989804,
+            "success_prob": 0.10025798126432484,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -24110,11 +24103,11 @@
           },
           {
             "sequence": [
+              "i16",
               "t16",
-              "o16",
               "d20"
             ],
-            "success_prob": 0.0620519920605537,
+            "success_prob": 0.06251020092789347,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -24487,11 +24480,10 @@
           },
           {
             "sequence": [
-              "t19",
-              "i13",
-              "d20"
+              "t20",
+              "ibull"
             ],
-            "success_prob": 0.04973637726001959,
+            "success_prob": 0.06956793941114445,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -30503,20 +30495,20 @@
           },
           {
             "sequence": [
-              "t15",
-              "d8"
+              "o11",
+              "ibull"
             ],
-            "success_prob": 0.09725559285263108,
+            "success_prob": 0.11017806244620396,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "t7",
-              "d20"
+              "i11",
+              "ibull"
             ],
-            "success_prob": 0.08988940408823892,
-            "safety": 0.9,
+            "success_prob": 0.11017806244620396,
+            "safety": 0.5,
             "is_one_dart": false
           }
         ]
@@ -33116,11 +33108,11 @@
           },
           {
             "sequence": [
+              "i16",
               "t16",
-              "o16",
               "d20"
             ],
-            "success_prob": 0.0620519920605537,
+            "success_prob": 0.06869530719155742,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -33493,11 +33485,10 @@
           },
           {
             "sequence": [
-              "t19",
-              "o13",
-              "d20"
+              "t20",
+              "ibull"
             ],
-            "success_prob": 0.05465757050458698,
+            "success_prob": 0.06956793941114445,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -39516,11 +39507,11 @@
           },
           {
             "sequence": [
-              "t7",
-              "d20"
+              "o11",
+              "ibull"
             ],
-            "success_prob": 0.1098371269907851,
-            "safety": 0.9,
+            "success_prob": 0.12009814362808303,
+            "safety": 0.5,
             "is_one_dart": false
           }
         ]
@@ -42112,21 +42103,21 @@
           },
           {
             "sequence": [
-              "o20",
-              "t20",
-              "d12"
+              "i16",
+              "t16",
+              "d20"
             ],
-            "success_prob": 0.07335335300628969,
+            "success_prob": 0.07488041345522134,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "t16",
-              "o16",
-              "d20"
+              "o20",
+              "t20",
+              "d12"
             ],
-            "success_prob": 0.0620519920605537,
+            "success_prob": 0.07335335300628969,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -51115,21 +51106,21 @@
           },
           {
             "sequence": [
-              "o20",
-              "t20",
-              "d12"
+              "i16",
+              "t16",
+              "d20"
             ],
-            "success_prob": 0.07335335300628969,
+            "success_prob": 0.08106551971888527,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "t16",
-              "o16",
-              "d20"
+              "o20",
+              "t20",
+              "d12"
             ],
-            "success_prob": 0.0620519920605537,
+            "success_prob": 0.07335335300628969,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -60117,21 +60108,21 @@
           },
           {
             "sequence": [
-              "o20",
-              "t20",
-              "d12"
+              "i16",
+              "t16",
+              "d20"
             ],
-            "success_prob": 0.07335335300628969,
+            "success_prob": 0.08725062598254921,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "t16",
-              "o16",
-              "d20"
+              "o20",
+              "t20",
+              "d12"
             ],
-            "success_prob": 0.0620519920605537,
+            "success_prob": 0.07335335300628969,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -69123,21 +69114,21 @@
           },
           {
             "sequence": [
-              "o20",
-              "t20",
-              "d12"
+              "i16",
+              "t16",
+              "d20"
             ],
-            "success_prob": 0.07335335300628969,
+            "success_prob": 0.09343573224621315,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
-              "t16",
-              "o16",
-              "d20"
+              "o20",
+              "t20",
+              "d12"
             ],
-            "success_prob": 0.0620519920605537,
+            "success_prob": 0.07335335300628969,
             "safety": 0.5,
             "is_one_dart": false
           }
@@ -78134,21 +78125,21 @@
           },
           {
             "sequence": [
-              "o20",
-              "t20",
-              "d12"
+              "i16",
+              "t16",
+              "d20"
             ],
-            "success_prob": 0.07335335300628969,
+            "success_prob": 0.09993009382306027,
             "safety": 0.5,
             "is_one_dart": false
           },
           {
             "sequence": [
+              "o20",
               "t20",
-              "o12",
-              "d16"
+              "d12"
             ],
-            "success_prob": 0.06410642630819542,
+            "success_prob": 0.07335335300628969,
             "safety": 0.5,
             "is_one_dart": false
           }

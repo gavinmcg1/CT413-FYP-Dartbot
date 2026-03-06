@@ -7,8 +7,6 @@ import axios, { AxiosInstance } from 'axios';
 import Constants from 'expo-constants';
 import { API_CONFIG } from '../config';
 
-
-
 // Configuration - adjust IP/port as needed for your local development
 const IS_WEB = typeof window !== 'undefined';
 const WEB_HOST = IS_WEB ? window.location.hostname : 'localhost';
@@ -116,9 +114,9 @@ class DartbotAPI {
     });
   }
 
-  /**
-   * Check if backend is reachable and has data
-   */
+  
+   // Check if backend is reachable and has data
+   
   async healthCheck(): Promise<boolean> {
     try {
       const response = await this.api.get('/api/health');
@@ -179,9 +177,7 @@ class DartbotAPI {
     }
   }
 
-  /**
-   * Get simulation results data (miss distributions, model)
-   */
+   // Get simulation results data (miss distributions, model)
   async getSimulationResults(): Promise<SimulationResultsResponse | null> {
     try {
       const response = await this.api.get<SimulationResultsResponse>('/api/simulation/results');
@@ -194,9 +190,7 @@ class DartbotAPI {
     }
   }
 
-  /**
-   * Get double outcomes data (hit/miss distributions for aimed doubles)
-   */
+   // Get double outcomes data (hit/miss distributions for aimed doubles)
   async getDoubleOutcomes(): Promise<DoubleOutcomesResponse | null> {
     try {
       const response = await this.api.get<DoubleOutcomesResponse>('/api/double/outcomes');

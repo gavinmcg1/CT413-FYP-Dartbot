@@ -34,13 +34,198 @@ function filterCandidatesByDarts(candidates: string[], remainingDarts: number): 
 }
 
 /**
- * Single-dart finishable scores (doubles 2-40 and Bull)
+ * Single-dart finishable scores (even numbers 2-40 and Bull)
  */
 const SINGLE_DART_FINISHES = new Set([
   2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 50
 ]);
 
 const IMPOSSIBLE_CHECKOUT_SCORES = new Set([1, 159, 162, 163, 165, 166, 168, 169]);
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function isFinishRangeScore(score: number): boolean {
+  return score >= 2 && score <= 170 && !IMPOSSIBLE_CHECKOUT_SCORES.has(score);
+}
+
+function estimateExpectedLegs(
+  legOrSet: string,
+  formatType: string,
+  formatNumber: number,
+  requiredToWin: number,
+  legsToWinSet: number
+): number {
+  if (legOrSet === 'Legs') {
+    return formatType === 'Best Of' ? formatNumber : Math.max(1, requiredToWin * 2 - 1);
+  }
+
+  const expectedSets = formatType === 'Best Of' ? formatNumber : Math.max(1, requiredToWin * 2 - 1);
+  return Math.max(1, expectedSets * legsToWinSet);
+}
+
+type BotPersonality = 'risky' | 'nervy' | 'steady';
+
+function getRandomBotPersonality(level: number): BotPersonality {
+  const roll = Math.random();
+  if (level >= 16) {
+    return roll < 0.5 ? 'risky' : 'steady';
+  }
+  if (roll < 1 / 3) return 'risky';
+  if (roll < 2 / 3) return 'nervy';
+  return 'steady';
+}
+
+function formatPersonalityLabel(personality: BotPersonality): string {
+  return personality.charAt(0).toUpperCase() + personality.slice(1);
+}
+
+function getPersonalityPressureConfig(personality: BotPersonality): {
+  susceptibilityMultiplier: number;
+  anxietyRandomnessScale: number;
+  totalPenaltyMultiplier: number;
+} {
+  switch (personality) {
+    case 'nervy':
+      return {
+        susceptibilityMultiplier: 1.3,
+        anxietyRandomnessScale: 1.35,
+        totalPenaltyMultiplier: 1.2,
+      };
+    case 'steady':
+      return {
+        susceptibilityMultiplier: 0.78,
+        anxietyRandomnessScale: 0.75,
+        totalPenaltyMultiplier: 0.82,
+      };
+    default:
+      return {
+        susceptibilityMultiplier: 1,
+        anxietyRandomnessScale: 1,
+        totalPenaltyMultiplier: 1,
+      };
+  }
+}
+
+function computePressureAdjustedLevel(params: {
+  baseLevel: number;
+  scoreLeft: number;
+  opponentScore: number;
+  legOrSet: string;
+  formatType: string;
+  formatNumber: number;
+  requiredToWin: number;
+  legsToWinSet: number;
+  botLegsWon: number;
+  botSetsWon: number;
+  totalLegsPlayed: number;
+  recentLegWinners: Array<'user' | 'dartbot'>;
+  isAimingAtDouble: boolean;
+  personality: BotPersonality;
+}): {
+  effectiveLevel: number;
+  basePressure: number;
+  anxiety: number;
+  totalPenalty: number;
+  pressureLevelPenalty: number;
+  checkoutDifficultyPenalty: number;
+  doublePressurePenalty: number;
+} {
+  const {
+    baseLevel,
+    scoreLeft,
+    opponentScore,
+    legOrSet,
+    formatType,
+    formatNumber,
+    requiredToWin,
+    legsToWinSet,
+    botLegsWon,
+    botSetsWon,
+    totalLegsPlayed,
+    recentLegWinners,
+    isAimingAtDouble,
+    personality,
+  } = params;
+
+  const personalityPressureConfig = getPersonalityPressureConfig(personality);
+  const susceptibility = clamp01(((18 - baseLevel) / 17) * personalityPressureConfig.susceptibilityMultiplier);
+  const expectedLegs = estimateExpectedLegs(legOrSet, formatType, formatNumber, requiredToWin, legsToWinSet);
+  const lateMatchPressure = clamp01(totalLegsPlayed / expectedLegs);
+
+  const botInFinishRange = isFinishRangeScore(scoreLeft);
+  const opponentInFinishRange = isFinishRangeScore(opponentScore);
+
+  let legScorePressure = 0;
+  if (botInFinishRange) legScorePressure += 0.35;
+  if (opponentInFinishRange) legScorePressure += 0.35;
+  if (scoreLeft <= 100) legScorePressure += 0.15;
+  if (scoreLeft <= 60) legScorePressure += 0.15;
+  if (opponentScore <= scoreLeft + 40) legScorePressure += 0.1;
+  legScorePressure = clamp01(legScorePressure);
+
+  let opportunityPressure = 0;
+  if (legOrSet === 'Legs') {
+    const isMatchPoint = formatType === 'Best Of'
+      ? (botLegsWon + 1 >= requiredToWin)
+      : (botLegsWon >= requiredToWin - 1);
+    if (isMatchPoint && botInFinishRange) {
+      opportunityPressure = 1;
+    }
+  } else {
+    const isSetPoint = botLegsWon >= legsToWinSet - 1;
+    const isMatchPoint = botSetsWon >= requiredToWin - 1 && isSetPoint;
+    if (isMatchPoint && botInFinishRange) {
+      opportunityPressure = 1;
+    } else if (isSetPoint && botInFinishRange) {
+      opportunityPressure = 0.75;
+    }
+  }
+
+  let trailingUserWinStreak = 0;
+  for (let i = recentLegWinners.length - 1; i >= 0; i--) {
+    if (recentLegWinners[i] === 'user') {
+      trailingUserWinStreak++;
+    } else {
+      break;
+    }
+  }
+
+  const historyPressure = trailingUserWinStreak >= 2
+    ? clamp01(0.65 + (trailingUserWinStreak - 2) * 0.15)
+    : 0;
+
+  const basePressure = clamp01(
+    0.3 * lateMatchPressure +
+    0.3 * legScorePressure +
+    0.25 * opportunityPressure +
+    0.15 * historyPressure
+  );
+
+  const anxietyRandomness = (Math.random() - 0.5) * 0.14 * personalityPressureConfig.anxietyRandomnessScale;
+  const anxiety = clamp01(basePressure * (0.5 + susceptibility * 0.7) + anxietyRandomness);
+  const pressureLevelPenalty = anxiety * (1.5 + susceptibility * 3.0);
+
+  let checkoutDifficultyPenalty = 0;
+  if (botInFinishRange) {
+    const checkoutDifficulty = clamp01((scoreLeft - 2) / 168);
+    checkoutDifficultyPenalty = 0.4 + checkoutDifficulty * 2.1;
+  }
+
+  const doublePressurePenalty = isAimingAtDouble ? anxiety * 0.6 : 0;
+  const totalPenalty = (pressureLevelPenalty + checkoutDifficultyPenalty + doublePressurePenalty) * personalityPressureConfig.totalPenaltyMultiplier;
+
+  return {
+    effectiveLevel: Math.max(1, Math.min(18, baseLevel - totalPenalty)),
+    basePressure,
+    anxiety,
+    totalPenalty,
+    pressureLevelPenalty,
+    checkoutDifficultyPenalty,
+    doublePressurePenalty,
+  };
+}
 
 function formatCheckoutTokenForDisplay(token: string): string {
   const normalized = token.trim().toLowerCase();
@@ -68,6 +253,26 @@ function formatCheckoutSequenceForDisplay(sequence: string | null): string {
     .map((token) => formatCheckoutTokenForDisplay(token))
     .filter(Boolean)
     .join('  ');
+}
+
+function formatDartResultForStatus(token: string | null): string {
+  if (!token) return 'miss';
+
+  const normalized = token.trim().toLowerCase();
+  const match = normalized.match(/^([sdt])(\d{1,2})$/);
+  if (!match) return normalized;
+
+  const [, multiplier, valueStr] = match;
+  const value = parseInt(valueStr, 10);
+
+  if (multiplier === 's') {
+    if (value === 25) return '25';
+    if (value === 50) return 'bull';
+    return `${value}`;
+  }
+
+  if (multiplier === 'd') return `D${value}`;
+  return `T${value}`;
 }
 
 /**
@@ -108,10 +313,41 @@ function calculateFallbackQuality(sequence: string, startingScore: number): numb
   return 0;
 }
 
+function getRiskyCheckoutOverrideAlways(score: number, remainingDarts: number): string[] {
+  const key = `${score}:${remainingDarts}`;
+  const overrides: Record<string, string[]> = {
+    '80:2': ['d20,d20', 't20,d10'],
+    '76:2': ['d19,d19', 't20,d8'],
+    '72:2': ['d18,d18', 't16,d12'],
+    '75:2': ['obull,ibull', 't17,d12'],
+    '131:3': ['t17,d20,d20', 't20,t13,d16'], 
+    '133:3': ['t19,d19,d19', 't20,t19,d8'],
+    '134:3': ['t18,d20,d20', 't20,t14,d16'],
+    '137:3': ['t19,d20,d20', 't20,t19,d10'],
+    '138:3': ['t19,t19,d12', 't20,t18,d12'],
+    '142:3': ['t17,t17,d20', 't20,t14,d20'],
+    '146:3': ['t19,t19,d20', 't20,t18,d20'],
+    '148:3': ['t18,t18,d20', 't20,t20,d14'],
+  };
+
+  return overrides[key] ?? [];
+}
+
+function getRiskyCheckoutOverrideWhenSafe(score: number, remainingDarts: number): string[] {
+  const key = `${score}:${remainingDarts}`;
+  const overrides: Record<string, string[]> = {
+    '121:3': ['ibull,t13,d16', 't20,t11,d14'],
+    '122:3': ['ibull,t16,d12', 't18,t18,d7'],
+    '150:3': ['ibull,ibull,ibull', 't20,t20,d15'],
+  };
+
+  return overrides[key] ?? [];
+}
+
 /**
  * Get the first valid checkout sequence from API recommendation
  * Filters candidates by remaining darts and returns the best one
- * SMART: When exactly 2 darts remain, re-ranks by fallback quality
+ * When exactly 2 darts remain, re-ranks by fallback quality
  * @param recommendation - API recommendation object
  * @param remainingDarts - Number of darts left in the turn
  * @param currentScore - Current score remaining (for fallback calculation)
@@ -120,7 +356,9 @@ function calculateFallbackQuality(sequence: string, startingScore: number): numb
 function getBestValidCheckoutSequence(
   recommendation: any,
   remainingDarts: number,
-  currentScore?: number
+  currentScore?: number,
+  personality: BotPersonality = 'steady',
+  opponentScore?: number
 ): string | null {
   if (!recommendation) return null;
   
@@ -129,10 +367,64 @@ function getBestValidCheckoutSequence(
   if (allCandidates.length > 0) {
     // Filter candidates by dart count
     let validCandidates = filterCandidatesByDarts(allCandidates, remainingDarts);
+
+    // for low checkouts (<= 60) with 2+ darts left, avoid treble routes.
+    // This applies before personality logic so risky cannot force treble-first here.
+    const shouldSuppressLowScoreTrebles =
+      typeof currentScore === 'number' &&
+      currentScore <= 60 &&
+      remainingDarts >= 2;
+
+    if (validCandidates.length > 1 && shouldSuppressLowScoreTrebles) {
+      const nonTrebleRoutes = validCandidates.filter((sequence) => {
+        const tokens = sequence.split(',').map((token) => token.trim().toLowerCase()).filter(Boolean);
+        return !tokens.some((token) => /^t\d{1,2}$/.test(token));
+      });
+
+      if (nonTrebleRoutes.length > 0) {
+        validCandidates = nonTrebleRoutes;
+        console.log(`[SMART CHECKOUT] ${currentScore} with ${remainingDarts} darts: removed treble routes for low-score checkout`);
+      }
+    }
+
+    // For low odd checkouts with 2+ darts (e.g. 41), prefer single-to-double routes
+    // and suppress treble-first options regardless of personality.
+    const shouldPreferSingleToDouble =
+      typeof currentScore === 'number' &&
+      remainingDarts >= 2 &&
+      currentScore > 40 &&
+      currentScore <= 61 &&
+      currentScore % 2 === 1;
+
+    if (validCandidates.length > 1 && shouldPreferSingleToDouble) {
+      const getTokens = (sequence: string) => sequence.split(',').map((token) => token.trim().toLowerCase()).filter(Boolean);
+      const hasTreble = (tokens: string[]) => tokens.some((token) => /^t\d{1,2}$/.test(token));
+      const isSingleToDouble = (tokens: string[]) => {
+        if (tokens.length < 2) return false;
+        const startsSingle = /^s\d{1,2}$/.test(tokens[0]) || tokens[0] === 'obull';
+        const endsDouble = /^d\d{1,2}$/.test(tokens[tokens.length - 1]) || tokens[tokens.length - 1] === 'ibull';
+        return startsSingle && endsDouble && !hasTreble(tokens);
+      };
+
+      const singleToDoubleRoutes = validCandidates.filter((sequence) => isSingleToDouble(getTokens(sequence)));
+      if (singleToDoubleRoutes.length > 0) {
+        validCandidates = singleToDoubleRoutes;
+        console.log(`[SMART CHECKOUT] ${currentScore} with ${remainingDarts} darts: preferring single-to-double routes`);
+      } else {
+        const nonTrebleRoutes = validCandidates.filter((sequence) => {
+          const tokens = getTokens(sequence);
+          return !hasTreble(tokens);
+        });
+        if (nonTrebleRoutes.length > 0) {
+          validCandidates = nonTrebleRoutes;
+          console.log(`[SMART CHECKOUT] ${currentScore} with ${remainingDarts} darts: suppressing treble-first routes`);
+        }
+      }
+    }
     
-    // SMART SELECTION: Only for specific 2-dart scores where treble-first fallback matters
-    // - 61 to 70 (single leaves useful doubles/bull options)
-    // - 101, 104, 107, 110 (special prompt scores)
+    // Only for specific 2-dart scores where treble-first fallback matters
+    // 61 to 70 (single leaves useful doubles/bull options)
+    // 101, 104, 107, 110 (special prompt scores)
     const smartFallbackScores = new Set([101, 104, 107, 110]);
     const shouldRerankByFallback =
       remainingDarts === 2 &&
@@ -154,6 +446,63 @@ function getBestValidCheckoutSequence(
       if (candidatesWithQuality[0].quality > 0 && candidatesWithQuality[0].sequence !== allCandidates[0]) {
         console.log(`[SMART CHECKOUT] 2 darts on ${currentScore}: Preferring ${candidatesWithQuality[0].sequence} over ${allCandidates[0]} (fallback quality: ${candidatesWithQuality[0].quality})`);
       }
+    }
+
+    if (validCandidates.length > 1 && personality === 'risky') {
+      const canUseRiskyOverride =
+        typeof opponentScore === 'number' ? !isFinishRangeScore(opponentScore) : true;
+
+      if (typeof currentScore === 'number') {
+        const alwaysRiskyRoutes = getRiskyCheckoutOverrideAlways(currentScore, remainingDarts);
+        if (alwaysRiskyRoutes.length > 0) {
+          const normalizedAlwaysMap = new Map(validCandidates.map((seq) => [seq.toLowerCase(), seq]));
+          for (const preferred of alwaysRiskyRoutes) {
+            const matched = normalizedAlwaysMap.get(preferred.toLowerCase());
+            if (matched) {
+              console.log(`[RISKY CHECKOUT] Using always-on risky route ${matched} for score ${currentScore} with ${remainingDarts} darts left`);
+              return matched;
+            }
+          }
+        }
+
+        if (canUseRiskyOverride) {
+          const safeOnlyRiskyRoutes = getRiskyCheckoutOverrideWhenSafe(currentScore, remainingDarts);
+          if (safeOnlyRiskyRoutes.length > 0) {
+            const normalizedSafeMap = new Map(validCandidates.map((seq) => [seq.toLowerCase(), seq]));
+            for (const preferred of safeOnlyRiskyRoutes) {
+              const matched = normalizedSafeMap.get(preferred.toLowerCase());
+              if (matched) {
+                console.log(`[RISKY CHECKOUT] Using safe-only risky route ${matched} for score ${currentScore} with ${remainingDarts} darts left (opponent not on finish)`);
+                return matched;
+              }
+            }
+          }
+        } else {
+          console.log(`[RISKY CHECKOUT] Opponent on finish (${opponentScore}); skipping safe-only risky overrides at score ${currentScore}`);
+        }
+      }
+
+      const getAggressionScore = (sequence: string): number => {
+        const firstToken = sequence.split(',')[0]?.trim().toLowerCase() ?? '';
+        const trebleMatch = firstToken.match(/^t(\d{1,2})$/);
+        if (trebleMatch) {
+          return 100 + parseInt(trebleMatch[1], 10);
+        }
+        if (firstToken === 'ibull') {
+          return 85;
+        }
+        const doubleMatch = firstToken.match(/^d(\d{1,2})$/);
+        if (doubleMatch) {
+          return 50 + parseInt(doubleMatch[1], 10);
+        }
+        const singleMatch = firstToken.match(/^[sio](\d{1,2})$/);
+        if (singleMatch) {
+          return 10 + parseInt(singleMatch[1], 10);
+        }
+        return 0;
+      };
+
+      validCandidates = [...validCandidates].sort((a, b) => getAggressionScore(b) - getAggressionScore(a));
     }
     
     if (validCandidates.length > 0) {
@@ -187,7 +536,11 @@ export default function GameScreen() {
 
   const outRule = (params.outRule as string) || 'double';
   const inRule = (params.inRule as string) || 'straight'; // 'straight' or 'double'
+  const pressureMode = ((params.pressureMode as string) || 'on').toLowerCase();
+  const usePressureModel = pressureMode !== 'off';
+  const usePersonalityModel = usePressureModel;
   const level = parseInt(params.level as string, 10) || 10; // 1-18 from setup screen
+  const botPersonality = useMemo<BotPersonality>(() => getRandomBotPersonality(level), [level]);
   const formatType = (params.formatType as string) || 'First To'; // "Best Of" or "First To"
   const legOrSet = (params.legOrSet as string) || 'Legs'; // "Legs" or "Sets"
   const formatNumber = parseInt(params.formatNumber as string, 10) || 1; // e.g., 3, 5, 7
@@ -247,6 +600,7 @@ export default function GameScreen() {
 
   const [userLegsWon, setUserLegsWon] = useState<number>(0);
   const [botLegsWon, setBotLegsWon] = useState<number>(0);
+  const [recentLegWinners, setRecentLegWinners] = useState<Player[]>([]);
   const [currentLegNumber, setCurrentLegNumber] = useState<number>(1);
   const [totalLegsPlayed, setTotalLegsPlayed] = useState<number>(0);
   const totalLegsPlayedRef = useRef(0);
@@ -307,10 +661,13 @@ export default function GameScreen() {
 
   // Double In stats
   const [hasHitDoubleIn, setHasHitDoubleIn] = useState<boolean>(false);
+  const [botHasHitDoubleIn, setBotHasHitDoubleIn] = useState<boolean>(false);
   const [doubleInAttempts, setDoubleInAttempts] = useState<number>(0);
   const [doubleInSuccess, setDoubleInSuccess] = useState<number>(0);
   const [cumulativeDoubleInAttempts, setCumulativeDoubleInAttempts] = useState<number>(0);
   const [cumulativeDoubleInSuccess, setCumulativeDoubleInSuccess] = useState<number>(0);
+  const [botCumulativeDoubleInAttempts, setBotCumulativeDoubleInAttempts] = useState<number>(0);
+  const [botCumulativeDoubleInSuccess, setBotCumulativeDoubleInSuccess] = useState<number>(0);
 
   // History for undo
   type GameState = {
@@ -327,6 +684,7 @@ export default function GameScreen() {
     doubleAttempts: number;
     userLegsWon: number;
     botLegsWon: number;
+    recentLegWinners: Player[];
     totalLegsPlayed: number;
     userSetsWon: number;
     botSetsWon: number;
@@ -334,8 +692,11 @@ export default function GameScreen() {
     cumulativeCheckoutSuccess: number;
     cumulativeDoubleInAttempts: number;
     cumulativeDoubleInSuccess: number;
+    botCumulativeDoubleInAttempts: number;
+    botCumulativeDoubleInSuccess: number;
     currentLegStartIndex: number;
     hasHitDoubleIn: boolean;
+    botHasHitDoubleIn: boolean;
     doubleInAttempts: number;
     doubleInSuccess: number;
     botThrows: number[];
@@ -448,8 +809,6 @@ export default function GameScreen() {
     setCurrentDarts(currentDarts.slice(0, -1));
   };
 
-
-
   const handlePerDartConfirm = () => {
     if (currentDarts.length === 0) return;
     const totalScore = currentDarts.reduce((sum, dart) => sum + (dart.value * dart.multiplier), 0);
@@ -486,6 +845,7 @@ export default function GameScreen() {
    */
   // Handle leg completion and reset for next leg
   const handleLegWin = (legWinner: Player) => {
+    setRecentLegWinners((prev) => [...prev, legWinner].slice(-6));
     const newUserLegsWon = legWinner === 'user' ? userLegsWon + 1 : userLegsWon;
     const newBotLegsWon = legWinner === 'dartbot' ? botLegsWon + 1 : botLegsWon;
     const newTotalLegsPlayed = totalLegsPlayed + 1;
@@ -518,6 +878,7 @@ export default function GameScreen() {
         setWinner(null);
         setInputScore('0');
         setHasHitDoubleIn(false);
+        setBotHasHitDoubleIn(false);
         setUserCheckoutDarts(null);
         setUserCheckoutDoubles(null);
         setBotCheckoutDarts(null);
@@ -552,7 +913,7 @@ export default function GameScreen() {
       setWinner(null);
       setInputScore('0');
       setHasHitDoubleIn(false); // Reset double in for new leg
-      // Reset checkout stats for new leg
+      setBotHasHitDoubleIn(false);
       setUserCheckoutDarts(null);
       setUserCheckoutDoubles(null);
       setBotCheckoutDarts(null);
@@ -561,7 +922,7 @@ export default function GameScreen() {
       const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
       setCurrentPlayer(nextFirstPlayer);
       setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
-      // Use functional updates to get current array lengths (not stale closure values)
+      // Use functional updates to get current array lengths
       setUserThrows((current) => {
         setCurrentLegStartIndex(current.length);
         return current;
@@ -620,7 +981,7 @@ export default function GameScreen() {
       setWinner(null);
       setInputScore('0');
       setHasHitDoubleIn(false); // Reset double in for new set
-      // Reset checkout stats for new leg
+      setBotHasHitDoubleIn(false);
       setUserCheckoutDarts(null);
       setUserCheckoutDoubles(null);
       setBotCheckoutDarts(null);
@@ -629,7 +990,7 @@ export default function GameScreen() {
       const nextFirstPlayer = initialFirstPlayer === 'user' ? (newUserSetsWon % 2 === 0 ? 'user' : 'dartbot') : (newUserSetsWon % 2 === 0 ? 'dartbot' : 'user');
       setCurrentPlayer(nextFirstPlayer);
       setStatus(`Set ${newUserSetsWon + newBotSetsWon} won! Starting Leg 1 of Set ${newUserSetsWon + newBotSetsWon + 1}. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
-      // Use functional updates to get current array lengths (not stale closure values)
+      // Use functional updates to get current array lengths
       setUserThrows((current) => {
         setCurrentLegStartIndex(current.length);
         return current;
@@ -650,6 +1011,7 @@ export default function GameScreen() {
     setWinner(null);
     setInputScore('0');
     setHasHitDoubleIn(false); // Reset double in for new leg
+    setBotHasHitDoubleIn(false);
     // Reset checkout stats for new leg
     setUserCheckoutDarts(null);
     setUserCheckoutDoubles(null);
@@ -660,7 +1022,7 @@ export default function GameScreen() {
     setCurrentPlayer(nextFirstPlayer);
     setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
     // Mark where the next leg starts for per-leg calculations
-    // Use functional updates to get current array lengths (not stale closure values)
+    // Use functional updates to get current array lengths
     setUserThrows((current) => {
       setCurrentLegStartIndex(current.length);
       return current;
@@ -671,7 +1033,7 @@ export default function GameScreen() {
     });
   };
 
-  const applyThrow = (player: Player, throwScore: number, dartScores?: number[]) => {
+  const applyThrow = (player: Player, throwScore: number, dartScores?: number[], dartDisplay?: string[]) => {
     const needsDouble = outRule === 'double';
     const scoreBefore = player === 'user' ? userScore : botScore;
     // Complete list of mathematically impossible checkouts (cannot finish on double from these scores)
@@ -694,6 +1056,7 @@ export default function GameScreen() {
         doubleAttempts,
         userLegsWon,
         botLegsWon,
+        recentLegWinners: [...recentLegWinners],
         totalLegsPlayed,
         userSetsWon,
         botSetsWon,
@@ -701,8 +1064,11 @@ export default function GameScreen() {
         cumulativeCheckoutSuccess,
         cumulativeDoubleInAttempts,
         cumulativeDoubleInSuccess,
+        botCumulativeDoubleInAttempts,
+        botCumulativeDoubleInSuccess,
         currentLegStartIndex,
         hasHitDoubleIn,
+        botHasHitDoubleIn,
         doubleInAttempts,
         doubleInSuccess,
         botThrows: [...botThrows],
@@ -738,6 +1104,7 @@ export default function GameScreen() {
 
     // In double-out, a scored 0 can still represent darts thrown at a checkout attempt.
     // Prompt for darts-at-double for any valid checkout score (2-170, excluding impossible).
+    // A bust is still possible for these values
     if (player === 'user' && needsDouble && throwScore === 0 && isCheckoutEligible(scoreBefore)) {
       logUserTurn(0);
       setPendingThrow(0);
@@ -888,7 +1255,7 @@ export default function GameScreen() {
         
         setBotCheckoutDarts(botCheckoutDartsUsed);
         setBotCheckoutDoubles(1);
-        // Note: Attempts are tracked in generateBotThrow when aiming at doubles
+        // Attempts are tracked in generateBotThrow when aiming at doubles
         setBotCumulativeCheckoutSuccess((prev) => prev + 1);
         // Track highest finish
         if (throwScore > botHighestFinish) {
@@ -909,7 +1276,7 @@ export default function GameScreen() {
           setStatus(`${playerName} scored ${throwScore}. Next throw: Dartbot.`);
           setCurrentPlayer('dartbot');
         } else {
-          // Double out: prompt whenever at 50 or below (and above 0) - defer score update until confirmed
+          // Double out: prompt whenever at 50 or below (and above 0). defers score update until confirmed
           if (newScore > 0 && newScore <= 50 && isCheckoutEligible(scoreBefore)) {
             setPendingThrow(throwScore);
             setScoreBeforeDoublePrompt(scoreBefore);
@@ -924,8 +1291,11 @@ export default function GameScreen() {
       } else {
         setBotScore(newScore);
         setBotThrows((prev) => [...prev, throwScore]);
-        const dartBreakdownMsg = dartScores && dartScores.length > 0 
-          ? ` (${dartScores.map((s, i) => `D${i+1}:${s}`).join(', ')})` 
+        const breakdown = dartDisplay && dartDisplay.length > 0
+          ? dartDisplay
+          : dartScores?.map((score) => `${score}`) ?? [];
+        const dartBreakdownMsg = breakdown.length > 0
+          ? ` (${breakdown.map((entry, i) => `D${i + 1}:${entry}`).join(', ')})`
           : '';
         setStatus(`Dartbot scored ${throwScore}${dartBreakdownMsg}. Next throw: ${playerName}.`);
         setCurrentPlayer('user');
@@ -966,6 +1336,7 @@ export default function GameScreen() {
       setDoubleAttempts(targetState.doubleAttempts);
       setUserLegsWon(targetState.userLegsWon);
       setBotLegsWon(targetState.botLegsWon);
+      setRecentLegWinners(targetState.recentLegWinners);
       totalLegsPlayedRef.current = targetState.totalLegsPlayed;
       setTotalLegsPlayed(targetState.totalLegsPlayed);
       setUserSetsWon(targetState.userSetsWon);
@@ -974,8 +1345,11 @@ export default function GameScreen() {
       setCumulativeCheckoutSuccess(targetState.cumulativeCheckoutSuccess);
       setCumulativeDoubleInAttempts(targetState.cumulativeDoubleInAttempts);
       setCumulativeDoubleInSuccess(targetState.cumulativeDoubleInSuccess);
+      setBotCumulativeDoubleInAttempts(targetState.botCumulativeDoubleInAttempts);
+      setBotCumulativeDoubleInSuccess(targetState.botCumulativeDoubleInSuccess);
       setCurrentLegStartIndex(targetState.currentLegStartIndex);
       setHasHitDoubleIn(targetState.hasHitDoubleIn);
+      setBotHasHitDoubleIn(targetState.botHasHitDoubleIn);
       setDoubleInAttempts(targetState.doubleInAttempts);
       setDoubleInSuccess(targetState.doubleInSuccess);
       setBotThrows(targetState.botThrows);
@@ -1057,7 +1431,7 @@ export default function GameScreen() {
     if (doubleInDartsInput) {
       const darts = parseInt(doubleInDartsInput, 10);
       if (darts > 0) {
-        // Track darts thrown to get the double, then +1 for success
+        // Track darts thrown to get the double, then add 1 for success
         setCumulativeDoubleInAttempts((prev) => prev + darts);
         setCumulativeDoubleInSuccess((prev) => prev + 1);
         setDoubleInAttempts((prev) => prev + darts);
@@ -1112,7 +1486,7 @@ export default function GameScreen() {
       };
     }
 
-    // Calculate stats across ENTIRE MATCH, not just current leg
+    // Calculate stats across entire match
     const allThrows = userThrows;
     const turns = allThrows.length;
     const dartsInMatch = userCheckoutDarts
@@ -1123,7 +1497,7 @@ export default function GameScreen() {
     const matchTotal = allThrows.reduce((a, b) => a + b, 0);
     const threeDartAvg = dartsInMatch > 0 ? ((matchTotal / dartsInMatch) * 3).toFixed(2) : 0;
     
-    // 9DA is first 3 turns (9 darts) from the entire match (cumulative, not per-leg)
+    // 9DA is first 3 turns (9 darts) from the entire match 
     const first3 = allThrows.slice(0, 3);
     const first3Total = first3.reduce((a, b) => a + b, 0);
     const first9Avg = first3.length === 3 ? ((first3Total / 9) * 3).toFixed(2) : '0';
@@ -1172,7 +1546,7 @@ export default function GameScreen() {
       };
     }
 
-    // Calculate stats across ENTIRE MATCH, not just current leg
+    // Calculate stats across entire match
     const allThrows = botThrows;
     const turns = allThrows.length;
     const dartsInMatch = botCheckoutDarts
@@ -1183,7 +1557,7 @@ export default function GameScreen() {
     const matchTotal = allThrows.reduce((a, b) => a + b, 0);
     const threeDartAvg = dartsInMatch > 0 ? ((matchTotal / dartsInMatch) * 3).toFixed(2) : 0;
     
-    // 9DA is first 3 turns (9 darts) from the entire match (cumulative, not per-leg)
+    // 9DA is first 3 turns (9 darts) from the entire match
     const first3 = allThrows.slice(0, 3);
     const first3Total = first3.reduce((a, b) => a + b, 0);
     const first9Avg = first3.length === 3 ? ((first3Total / 9) * 3).toFixed(2) : '0';
@@ -1198,7 +1572,7 @@ export default function GameScreen() {
     const currentLegTurns = currentLegThrows.length;
     // Calculate darts thrown in current leg only
     const dartsInCurrentLeg = (() => {
-      // No throws yet in this leg - always return 0 (ignore stale checkout data)
+      // No throws yet in this leg - always return 0
       if (currentLegTurns === 0) return 0;
       // Leg finished with a checkout (only count checkout darts if score is actually 0)
       if (botScore === 0 && botCheckoutDarts && currentLegTurns > 0) {
@@ -1219,7 +1593,7 @@ export default function GameScreen() {
     };
   }, [botThrows, botCheckoutDarts, botCheckoutDoubles, botCumulativeDoubleAttempts, botCumulativeCheckoutSuccess, botCurrentLegStartIndex, botScore]);
 
-  const generateBotThrow = async (): Promise<{totalScore: number; dartScores: number[]}> => {
+  const generateBotThrow = async (): Promise<{totalScore: number; dartScores: number[]; dartDisplay: string[]}> => {
     // Use new probability-based engine
     const remainingScore = botScore;
     console.log(`\n========================================`);
@@ -1252,8 +1626,15 @@ export default function GameScreen() {
       ? Math.max(0, turns - 1) * 3 + botCheckoutDarts
       : turns * 3;
     const currentLegTotal = currentLegThrows.reduce((a, b) => a + b, 0);
+    const requiresDoubleIn = inRule === 'double' && !botHasHitDoubleIn;
+
+    const randomDoubleInTargetForTurn = Math.random() < 0.5 ? 'd20' : 'd16';
+
     // Dynamically choose targets per dart based on live score (checkout vs approach)
-    if (remainingScore <= 170) {
+    if (requiresDoubleIn) {
+      console.log(`[BOT] Double-in active: aiming at highest-probability double before scoring.`);
+      isAttemptingCheckout = false;
+    } else if (remainingScore <= 170) {
       console.log(`[BOT] Entering checkout range (score <= 170)`);
       isAttemptingCheckout = true;
     } else {
@@ -1261,7 +1642,7 @@ export default function GameScreen() {
       isAttemptingCheckout = false;
     }
 
-    let usedRoutingSimulation = true;
+    let effectiveScoresByDart: number[] = [];
 
     try {
       const averageRange = getAverageRangeForLevel(level);
@@ -1269,26 +1650,38 @@ export default function GameScreen() {
       let turnScore = 0;
       let finished = false;
       let doublesAttempted = 0;
+      let botDoubleInAttemptsThisTurn = 0;
+      let botDoubleInSuccessThisTurn = 0;
+      effectiveScoresByDart = [];
+      let botDoubleInAchievedThisTurn = !requiresDoubleIn;
         console.log(`[BOT] Starting turn at ${remainingScore}`);
 
         let resultAlreadySet = false;
         for (let i = 0; i < 3; i++) {
           const scoreLeft = remainingScore - turnScore;
-          let targetToken: string;
+          let targetToken = 't20';
           let isFromSequence = false; // Track if target came from a checkout sequence
           let shouldApplyVariance = true;
 
+          if (!botDoubleInAchievedThisTurn) {
+            targetToken = randomDoubleInTargetForTurn;
+            isFromSequence = true;
+            shouldApplyVariance = false;
+            console.log(`[BOT][DOUBLE-IN] Dart ${i + 1}: aiming at ${targetToken.toUpperCase()} to start scoring`);
+          } else {
+
           // Check if we can finish with one dart
           const canFinishWithOneDart = () => {
+            const remainingDartsInTurn = 3 - i;
             if (outRule === 'double') {
               // Double out rule: can finish on doubles (2-40 even) or bullseye (50)
-              if (scoreLeft === 50) return 'ibull'; // Bullseye
+              if (scoreLeft === 50 && remainingDartsInTurn === 1) return 'ibull'; // Bullseye only on last dart
               if (scoreLeft >= 2 && scoreLeft <= 40 && scoreLeft % 2 === 0) {
                 return `d${scoreLeft / 2}`; // Double
               }
             } else {
               // Straight out: can finish on any score
-              if (scoreLeft === 50) return 'ibull';
+              if (scoreLeft === 50 && remainingDartsInTurn === 1) return 'ibull';
               if (scoreLeft === 25) return 'obull';
               if (scoreLeft >= 1 && scoreLeft <= 20) return `s${scoreLeft}`;
               if (scoreLeft >= 21 && scoreLeft <= 40) return `d${Math.floor(scoreLeft / 2)}`;
@@ -1301,7 +1694,7 @@ export default function GameScreen() {
           
           const oneDartFinish = canFinishWithOneDart();
           if (oneDartFinish) {
-            // Can finish with one dart - aim directly for it!
+            // Can finish with one dart - aim directly for it
             targetToken = oneDartFinish;
             isFromSequence = true; // One-dart finishes are calculated, not random fallback
             console.log(`[BOT] Can finish ${scoreLeft} with one dart! Aiming at ${targetToken}`);
@@ -1317,12 +1710,18 @@ export default function GameScreen() {
                 isFromSequence = false;
               } else {
                 // Get the best sequence that fits the remaining darts
-                const bestSequence = getBestValidCheckoutSequence(recommendation, remainingDartsInTurn, scoreLeft);
+                const bestSequence = getBestValidCheckoutSequence(
+                  recommendation,
+                  remainingDartsInTurn,
+                  scoreLeft,
+                  usePersonalityModel ? botPersonality : 'steady',
+                  userScore
+                );
                 if (bestSequence) {
                   const parts = bestSequence.split(',');
                   targetToken = parts[0] ?? 't20';
                   isFromSequence = true;
-                  console.log(`[BOT] Optimal sequence for ${scoreLeft} with ${remainingDartsInTurn} darts: ${bestSequence}, using first dart: ${targetToken}`);
+                  console.log(`[BOT] Optimal sequence for ${scoreLeft} with ${remainingDartsInTurn} darts (${usePersonalityModel ? botPersonality : 'off'}): ${bestSequence}, using first dart: ${targetToken}`);
                 } else {
                   // No valid sequence with remaining darts.
                   // With one dart left, request an approach/setup suggestion (handles bogey scores).
@@ -1377,46 +1776,57 @@ export default function GameScreen() {
             // Score > 170: Use approach play to find best starting segment
             // Approach play identifies segments that leave better finishing positions
             console.log(`[BOT] Route: scoreLeft > 170 (${scoreLeft}), calling approach play API...`);
-            try {
-              const remainingDartsInTurn = 3 - i; // i=0 => 3 darts, i=1 => 2 darts, i=2 => 1 dart
-              const approachSuggestion = await dartbotAPI.getApproachSuggestion(scoreLeft, outRule, remainingDartsInTurn);
-              console.log(`[BOT] API response:`, approachSuggestion);
-              if (approachSuggestion && approachSuggestion.segment) {
-                targetToken = approachSuggestion.target ?? `t${approachSuggestion.segment}`;
-                isFromSequence = false;
-                // Do not mutate intended approach targets (e.g. T20 -> T1/T5).
-                // Miss behavior is already handled in simulateDartAtTarget.
-                shouldApplyVariance = false;
-                console.log(`[BOT] Approach play for ${scoreLeft} (${remainingDartsInTurn} darts): ${targetToken.toUpperCase()} - ${approachSuggestion.reason}`);
-                console.log(
-                  `[BOT] Approach alternatives:`,
-                  approachSuggestion.alternatives
-                    ?.map((a: any) => `${(a.target ?? `t${a.segment}`).toUpperCase()}(${a.quality})`)
-                    .join(', ') || 'none'
-                );
-              } else {
-                // Fallback to T20 if approach suggestion fails
-                console.warn(`[BOT] No approach suggestion for ${scoreLeft}, using fallback T20`);
+            if (usePersonalityModel && botPersonality === 'risky') {
+              targetToken = 't20';
+              isFromSequence = false;
+              shouldApplyVariance = false;
+              console.log(`[BOT] Risky personality: forcing aggressive T20 approach at ${scoreLeft}`);
+            } else {
+              try {
+                const remainingDartsInTurn = 3 - i; // i=0 => 3 darts, i=1 => 2 darts, i=2 => 1 dart
+                const approachSuggestion = await dartbotAPI.getApproachSuggestion(scoreLeft, outRule, remainingDartsInTurn);
+                console.log(`[BOT] API response:`, approachSuggestion);
+                if (approachSuggestion && approachSuggestion.segment) {
+                  targetToken = approachSuggestion.target ?? `t${approachSuggestion.segment}`;
+                  isFromSequence = false;
+                  // Do not mutate intended approach targets (e.g. T20 -> T1/T5).
+                  // Miss behavior is already handled in simulateDartAtTarget.
+                  shouldApplyVariance = false;
+                  console.log(`[BOT] Approach play for ${scoreLeft} (${remainingDartsInTurn} darts): ${targetToken.toUpperCase()} - ${approachSuggestion.reason}`);
+                  console.log(
+                    `[BOT] Approach alternatives:`,
+                    approachSuggestion.alternatives
+                      ?.map((a: any) => `${(a.target ?? `t${a.segment}`).toUpperCase()}(${a.quality})`)
+                      .join(', ') || 'none'
+                  );
+                } else {
+                  // Fallback to T20 if approach suggestion fails
+                  console.warn(`[BOT] No approach suggestion for ${scoreLeft}, using fallback T20`);
+                  targetToken = 't20';
+                  isFromSequence = false;
+                  shouldApplyVariance = false;
+                }
+              } catch (err) {
+                console.warn(`[BOT] Failed to get approach suggestion for ${scoreLeft}:`, err);
                 targetToken = 't20';
                 isFromSequence = false;
                 shouldApplyVariance = false;
               }
-            } catch (err) {
-              console.warn(`[BOT] Failed to get approach suggestion for ${scoreLeft}:`, err);
-              targetToken = 't20';
-              isFromSequence = false;
-              shouldApplyVariance = false;
             }
           }
 
+          }
+
           const intended = parseCheckoutTarget(targetToken);
-          // IMPORTANT: Do NOT apply variance to checkout sequence targets - use them exactly as specified
+          // Do not apply variance to checkout sequence targets - use them exactly as specified
           // Also skip variance when API explicitly indicates power scoring mode.
-          const intendedWithVariance = (isFromSequence || !shouldApplyVariance) ? intended : (
-            !(outRule === 'double' && scoreLeft <= 60)
-                ? applyIntendedHitVariance(intended, level)
-              : intended
-          );
+          const intendedWithVariance = (isFromSequence || !shouldApplyVariance)
+            ? intended
+            : !(outRule === 'double' && scoreLeft <= 60)
+              ? (usePersonalityModel && botPersonality === 'steady' && Math.random() < 0.6
+                  ? intended
+                  : applyIntendedHitVariance(intended, level))
+              : intended;
 
           const isCheckoutSetup = intendedWithVariance[0] === 'S' && scoreLeft <= 60;
 
@@ -1449,14 +1859,58 @@ export default function GameScreen() {
             doublesAttempted++;
           }
 
+          const pressureAdjustment = usePressureModel
+            ? computePressureAdjustedLevel({
+                baseLevel: level,
+                scoreLeft,
+                opponentScore: userScore,
+                legOrSet,
+                formatType,
+                formatNumber,
+                requiredToWin,
+                legsToWinSet,
+                botLegsWon,
+                botSetsWon,
+                totalLegsPlayed,
+                recentLegWinners,
+                isAimingAtDouble,
+                personality: botPersonality,
+              })
+            : null;
+
+          const effectiveLevel = pressureAdjustment?.effectiveLevel ?? level;
+
+          if (pressureAdjustment) {
+            console.log(
+              `[PRESSURE] D${i + 1} scoreLeft=${scoreLeft} baseLvl=${level.toFixed(2)} effLvl=${effectiveLevel.toFixed(2)} ` +
+              `penalty=${pressureAdjustment.totalPenalty.toFixed(2)} anxiety=${pressureAdjustment.anxiety.toFixed(2)} ` +
+              `baseP=${pressureAdjustment.basePressure.toFixed(2)} comp(level=${pressureAdjustment.pressureLevelPenalty.toFixed(2)}, ` +
+              `checkout=${pressureAdjustment.checkoutDifficultyPenalty.toFixed(2)}, double=${pressureAdjustment.doublePressurePenalty.toFixed(2)})`
+            );
+          }
+
           // Pass previous dart for "following the marker" bonus
           const previousDart = i > 0 ? darts[i - 1] : null;
-          const dart = simulateDartAtTarget(level, intendedWithVariance, undefined, isCheckoutSetup, previousDart);
+          let finalIntendedTarget = intendedWithVariance;
+          if (usePersonalityModel && botPersonality === 'nervy' && pressureAdjustment && pressureAdjustment.anxiety >= 0.65) {
+            const driftChance = 0.2 + Math.max(0, pressureAdjustment.anxiety - 0.65) * 0.5;
+            if (Math.random() < driftChance) {
+              if (/^T20$/i.test(finalIntendedTarget)) {
+                finalIntendedTarget = Math.random() < 0.5 ? 'T5' : 'T1';
+              } else if (/^S20$/i.test(finalIntendedTarget)) {
+                finalIntendedTarget = Math.random() < 0.5 ? 'S5' : 'S1';
+              } else if (/^D20$/i.test(finalIntendedTarget)) {
+                finalIntendedTarget = Math.random() < 0.5 ? 'D5' : 'D1';
+              }
+            }
+          }
+
+          const dart = simulateDartAtTarget(effectiveLevel, finalIntendedTarget, undefined, isCheckoutSetup, previousDart);
           darts.push(dart);
 
           if (isAimingAtDouble) {
             console.log(
-              `[BOT][DOUBLE %] Aim=${intendedWithVariance} HitChance=${(dart.hitProbability * 100).toFixed(1)}% | Level=${level} | DoublePenalty=${activeDoublePenalty.toFixed(2)}`
+              `[BOT][DOUBLE %] Aim=${finalIntendedTarget} HitChance=${(dart.hitProbability * 100).toFixed(1)}% | BaseLevel=${level.toFixed(2)} | EffectiveLevel=${effectiveLevel.toFixed(2)} | DoublePenalty=${activeDoublePenalty.toFixed(2)}`
             );
           }
           
@@ -1466,11 +1920,24 @@ export default function GameScreen() {
           }
           
           console.log(
-            `[BOT] Dart ${i + 1}: Score left=${scoreLeft}, Aiming at=${intendedWithVariance} (${(dart.hitProbability * 100).toFixed(1)}% hit chance), Hit=${dart.actual}, Score=${dart.score}, Success=${dart.actualHit ? '✓' : '✗'}`
+            `[BOT] Dart ${i + 1}: Score left=${scoreLeft}, Aiming at=${finalIntendedTarget} (${(dart.hitProbability * 100).toFixed(1)}% hit chance), Hit=${dart.actual}, Score=${dart.score}, Success=${dart.actualHit ? '✓' : '✗'}`
           );
+
+          if (!botDoubleInAchievedThisTurn) {
+            botDoubleInAttemptsThisTurn++;
+          }
           
-          const newTurnScore = turnScore + dart.score;
-          console.log(`[BOT] Turn total so far: ${turnScore} + ${dart.score} = ${newTurnScore}, Remaining would be: ${remainingScore - newTurnScore}`);
+          const didHitDoubleInThisDart = dart.actual?.startsWith('D') || dart.score === 50;
+          if (!botDoubleInAchievedThisTurn && didHitDoubleInThisDart) {
+            botDoubleInAchievedThisTurn = true;
+            botDoubleInSuccessThisTurn = 1;
+            console.log(`[BOT][DOUBLE-IN] Hit double on dart ${i + 1} (${dart.actual ?? dart.score}); scoring now active.`);
+          }
+
+          const effectiveDartScore = botDoubleInAchievedThisTurn ? dart.score : 0;
+          effectiveScoresByDart.push(effectiveDartScore);
+          const newTurnScore = turnScore + effectiveDartScore;
+          console.log(`[BOT] Turn total so far: ${turnScore} + ${effectiveDartScore} = ${newTurnScore}, Remaining would be: ${remainingScore - newTurnScore}`);
           
           if (newTurnScore > remainingScore) {
             console.log(`[BOT] BUST! Scored ${newTurnScore} > ${remainingScore}`);
@@ -1483,7 +1950,7 @@ export default function GameScreen() {
 
           if (newTurnScore === remainingScore) {
             if (outRule === 'double') {
-              // Check if finished on double or bullseye (inner bull = 50 = D25)
+              // Check if finished on double or bullseye (inner bull = 50)
               const isDouble = dart.actual && dart.actual[0] === 'D';
               const isBullseye = dart.score === 50; // Inner bull (50) counts as double
               if (!isDouble && !isBullseye) {
@@ -1511,7 +1978,16 @@ export default function GameScreen() {
       if (doublesAttempted > 0) {
         setBotCumulativeDoubleAttempts((prev) => prev + doublesAttempted);
       }
-      // Note: Success is tracked in applyThrow when bot actually finishes
+      if (requiresDoubleIn && botDoubleInAttemptsThisTurn > 0) {
+        setBotCumulativeDoubleInAttempts((prev) => prev + botDoubleInAttemptsThisTurn);
+      }
+      if (requiresDoubleIn && botDoubleInSuccessThisTurn > 0) {
+        setBotCumulativeDoubleInSuccess((prev) => prev + botDoubleInSuccessThisTurn);
+      }
+      if (!botHasHitDoubleIn && botDoubleInAchievedThisTurn) {
+        setBotHasHitDoubleIn(true);
+      }
+      // Success is tracked in applyThrow when bot actually finishes
 
       // Set final turn result if not already set by break statements
       if (!resultAlreadySet && !finished && turnScore > 0) {
@@ -1524,8 +2000,6 @@ export default function GameScreen() {
         turnResult = { darts, totalScore: 0, finished: false };
       }
     } catch (err) {
-      // Fallback to local simulation
-      usedRoutingSimulation = false;
       console.warn('Routing data unavailable, using local turn simulation');
     }
 
@@ -1534,7 +2008,7 @@ export default function GameScreen() {
     const boardOrder = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5];
     const boardIndex = new Map<number, number>(boardOrder.map((seg, idx) => [seg, idx]));
 
-    const getSingleNeighborSegments = (segment: number): number[] => {
+    const getSingleNeighbourSegments = (segment: number): number[] => {
       const idx = boardIndex.get(segment);
       if (idx === undefined) return [];
       const left1 = boardOrder[(idx - 1 + 20) % 20];
@@ -1548,13 +2022,13 @@ export default function GameScreen() {
       // Trebles can collapse to singles (e.g. 60 -> 20)
       if (score % 3 === 0 && score >= 3 && score <= 60) {
         const single = score / 3;
-        const neighbors = getSingleNeighborSegments(single);
-        return [single, ...neighbors.filter((n) => n < single)];
+        const neighbours = getSingleNeighbourSegments(single);
+        return [single, ...neighbours.filter((n) => n < single)];
       }
 
-      // Singles remap to neighbors (e.g. 20 -> 1/5/18/12)
+      // Singles remap to neighbours (e.g. 20 -> 1/5/18/12)
       if (score >= 1 && score <= 20) {
-        return getSingleNeighborSegments(score).filter((n) => n < score);
+        return getSingleNeighbourSegments(score).filter((n) => n < score);
       }
 
       return [];
@@ -1568,16 +2042,21 @@ export default function GameScreen() {
 
       // Generic single uplift toward board center segment 20
       if (score >= 1 && score <= 20 && score !== 20) {
-        const neighbors = getSingleNeighborSegments(score);
-        const preferred = neighbors.filter((n) => n > score);
+        const neighbours = getSingleNeighbourSegments(score);
+        const preferred = neighbours.filter((n) => n > score);
         return preferred.length > 0 ? preferred : [20];
       }
 
       return [];
     };
 
-    let adjustedDartScores = turnResult.darts.map((d) => d.score);
-    let finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
+    const originalDartScores = turnResult.totalScore === 0
+      ? turnResult.darts.map(() => 0)
+      : (effectiveScoresByDart.length === turnResult.darts.length
+          ? [...effectiveScoresByDart]
+          : turnResult.darts.map((d) => d.score));
+    let adjustedDartScores = [...originalDartScores];
+    let finalThrow = turnResult.totalScore;
 
     if (!isAttemptingCheckout && finalThrow > 0) {
       const projectedNewDarts = dartsInCurrentLeg + 3;
@@ -1586,10 +2065,25 @@ export default function GameScreen() {
       const projectedAvgFor = (total: number) => ((currentLegTotal + total) / projectedNewDarts) * 3;
       const maxDartChanges = 2;
       let dartChanges = 0;
+      const isTrebleLikeScore = (score: number) => score >= 45 && score <= 60 && score % 3 === 0;
+      const trebleLikeIndexes = originalDartScores
+        .map((score, index) => ({ score, index }))
+        .filter(({ score }) => isTrebleLikeScore(score))
+        .map(({ index }) => index);
+      const protectedTrebleIndexes = new Set(
+        trebleLikeIndexes.filter(() => Math.random() < 0.25)
+      );
 
-      // Reduce by moving dart scores to neighboring/lower outcomes
+      if (trebleLikeIndexes.length >= 2 && protectedTrebleIndexes.size === 0) {
+        const forcedProtectedIndex = trebleLikeIndexes[Math.floor(Math.random() * trebleLikeIndexes.length)];
+        protectedTrebleIndexes.add(forcedProtectedIndex);
+      }
+
+      // Reduce by moving dart scores to neighbouring/lower outcomes
+      // Disabled for level 10+ for now
       let projectedAvg = projectedAvgFor(finalThrow);
-      while (projectedAvg > upperAvg && dartChanges < maxDartChanges) {
+      if (level < 10) {
+        while (projectedAvg > upperAvg && dartChanges < maxDartChanges) {
         let bestIdx = -1;
         let bestNewScore = -1;
         let bestDrop = 0;
@@ -1599,10 +2093,19 @@ export default function GameScreen() {
           const current = adjustedDartScores[idx];
           const options = getReduceOptions(current);
           for (const next of options) {
-            // Keep T20 reductions realistic: allow 60 -> 20 often, but not always.
-            if (current === 60 && next === 20 && Math.random() < 0.35) {
+            // Keep roughly 1 in 4 treble-like darts unchanged for realism.
+            if (protectedTrebleIndexes.has(idx) && isTrebleLikeScore(current) && next < current) {
               continue;
             }
+
+            // Keep some S20 hits from always splitting to 1/5.
+            if (current === 20 && (next === 1 || next === 5)) {
+              const keepS20Chance = level <= 4 ? 0.65 : level <= 6 ? 0.45 : 0.2;
+              if (Math.random() < keepS20Chance) {
+                continue;
+              }
+            }
+
             const drop = current - next;
             if (drop > bestDrop) {
               bestDrop = drop;
@@ -1623,10 +2126,11 @@ export default function GameScreen() {
         finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
         projectedAvg = projectedAvgFor(finalThrow);
         dartChanges++;
-        console.log(`[BOT] Neighbor-adjust reduce: D${bestIdx + 1} ${prev} -> ${bestNewScore}`);
+        console.log(`[BOT] Neighbour-adjust reduce: D${bestIdx + 1} ${prev} -> ${bestNewScore}`);
+      }
       }
 
-      // Increase by pulling low neighboring singles back toward 20 (occasionally)
+      // Increase by pulling low neighbouring singles back toward 20 (occasionally)
       projectedAvg = projectedAvgFor(finalThrow);
       if (projectedAvg < lowerAvg && dartChanges < maxDartChanges && Math.random() < 0.3) {
         for (let idx = 0; idx < adjustedDartScores.length; idx++) {
@@ -1638,7 +2142,7 @@ export default function GameScreen() {
               adjustedDartScores[idx] = next;
               finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
               dartChanges++;
-              console.log(`[BOT] Neighbor-adjust increase: D${idx + 1} ${current} -> ${next}`);
+              console.log(`[BOT] Neighbour-adjust increase: D${idx + 1} ${current} -> ${next}`);
               break;
             }
           }
@@ -1649,7 +2153,16 @@ export default function GameScreen() {
     console.log(`[BOT TURN] Final throw: ${finalThrow}`);
     console.log(`========================================\n`);
     
-    return { totalScore: finalThrow, dartScores: adjustedDartScores };
+    const dartDisplay = turnResult.darts.map((dart, index) => {
+      const adjustedScore = adjustedDartScores[index];
+      const originalScore = originalDartScores[index];
+      if (typeof adjustedScore === 'number' && adjustedScore !== originalScore) {
+        return `${adjustedScore}`;
+      }
+      return formatDartResultForStatus(dart.actual);
+    });
+
+    return { totalScore: finalThrow, dartScores: adjustedDartScores, dartDisplay };
   };
 
   useEffect(() => {
@@ -1657,14 +2170,14 @@ export default function GameScreen() {
     if (currentPlayer !== 'dartbot') return;
     setBotThinking(true);
     const timer = setTimeout(async () => {
-      const { totalScore: botThrow, dartScores } = await generateBotThrow();
+      const { totalScore: botThrow, dartScores, dartDisplay } = await generateBotThrow();
       // Show individual dart scores in status if available
-      if (dartScores.length > 0) {
-        const dartBreakdown = dartScores.map((score, idx) => `D${idx + 1}: ${score}`).join(', ');
+      if (dartDisplay.length > 0) {
+        const dartBreakdown = dartDisplay.map((value, idx) => `D${idx + 1}: ${value}`).join(', ');
         console.log(`[BOT] Dart breakdown: ${dartBreakdown}`);
       }
       
-      applyThrow('dartbot', botThrow, dartScores);
+      applyThrow('dartbot', botThrow, dartScores, dartDisplay);
       setBotThinking(false);
     }, 700);
     return () => clearTimeout(timer);
@@ -1763,6 +2276,12 @@ export default function GameScreen() {
                 {matchWinner === 'user' ? `${playerName.toUpperCase()} WINS!` : matchWinner === 'dartbot' ? 'BOT WINS!' : 'DRAW!'}
               </Text>
             )}
+            <Text variant="labelSmall" style={{ color: theme.colors.primary, marginTop: 3, textAlign: 'center' }}>
+              Pressure Model: {usePressureModel ? 'ON' : 'OFF'}
+            </Text>
+            <Text variant="labelSmall" style={{ color: theme.colors.primary, marginTop: 2, textAlign: 'center' }}>
+              Personality: {usePersonalityModel ? formatPersonalityLabel(botPersonality) : 'OFF'}
+            </Text>
           </View>
           <Button
             mode="contained"
@@ -2070,13 +2589,20 @@ export default function GameScreen() {
             <Button
               mode="outlined"
               onPress={() => {
-                // Simply close the modal - score was never changed since we deferred it
                 setPendingThrow(null);
                 setShowDoublePrompt(false);
-                // Remove the history entry that was created when applyThrow was called
-                setHistory((prev) => prev.slice(0, -1));
-                // Remove the logged throw for this attempt
-                setUserThrows((prev) => prev.slice(0, -1));
+                // Restore pre-throw state so temporary states (e.g. Bust.) are cleared
+                setHistory((prev) => {
+                  if (prev.length === 0) return prev;
+                  const previousState = prev[prev.length - 1];
+                  setUserScore(previousState.userScore);
+                  setBotScore(previousState.botScore);
+                  setCurrentPlayer(previousState.currentPlayer);
+                  setStatus(previousState.status);
+                  setWinner(previousState.winner);
+                  setUserThrows(previousState.userThrows);
+                  return prev.slice(0, -1);
+                });
               }}
               style={{ marginTop: 16, width: '100%' }}
             >
@@ -2264,7 +2790,7 @@ export default function GameScreen() {
                 <View style={styles.statsRow}>
                   <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{cumulativeDoubleInAttempts > 0 ? ((cumulativeDoubleInSuccess / cumulativeDoubleInAttempts) * 100).toFixed(2) : '0.00'}%</Text>
                   <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Double In rate</Text>
-                  <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                  <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botCumulativeDoubleInAttempts > 0 ? ((botCumulativeDoubleInSuccess / botCumulativeDoubleInAttempts) * 100).toFixed(2) : '0.00'}%</Text>
                 </View>
               )}
 
@@ -2433,7 +2959,7 @@ export default function GameScreen() {
                 <View style={[styles.statsRow, styles.statsRowAlt]}>
                   <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellLeft, { color: theme.colors.onBackground }]}>{cumulativeDoubleInAttempts > 0 ? ((cumulativeDoubleInSuccess / cumulativeDoubleInAttempts) * 100).toFixed(2) : '0.00'}%</Text>
                   <Text variant="bodyMedium" style={[styles.statsCell, styles.statsCellCenter, { color: theme.colors.onBackground }]}>Double In rate</Text>
-                  <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>-</Text>
+                  <Text variant="bodyLarge" style={[styles.statsCell, styles.statsCellRight, { color: theme.colors.onBackground }]}>{botCumulativeDoubleInAttempts > 0 ? ((botCumulativeDoubleInSuccess / botCumulativeDoubleInAttempts) * 100).toFixed(2) : '0.00'}%</Text>
                 </View>
               )}
 

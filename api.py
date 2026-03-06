@@ -68,9 +68,7 @@ def is_finishable_score(score: int, out_rule: str = 'double') -> bool:
 
 
 def has_checkout_path(score: int) -> bool:
-    """
-    Check if a score has a checkout path available in checkout_candidates
-    """
+    # Check if a score has a checkout path available in checkout_candidates
     return str(score) in checkout_candidates and len(checkout_candidates[str(score)]) > 0
 
 
@@ -458,7 +456,6 @@ def find_best_approach_segment(score: int, out_rule: str = 'double', darts_avail
         ]
     }
 
-
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -468,7 +465,6 @@ def health_check():
         'has_data': has_data,
         'message': 'Dartbot API is running'
     }), 200
-
 
 @app.route('/', methods=['GET'])
 def root():
@@ -486,7 +482,6 @@ def root():
         }
     }), 200
 
-
 @app.route('/api/checkout/bins', methods=['GET'])
 def get_checkout_bins():
     """List all available checkout average bins"""
@@ -498,7 +493,6 @@ def get_checkout_bins():
         'bins': bins,
         'count': len(bins)
     }), 200
-
 
 @app.route('/api/simulation/results', methods=['GET'])
 def get_simulation_results():
@@ -517,7 +511,6 @@ def get_simulation_results():
         print(f"[API] Error returning simulation results: {e}")
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/api/double/outcomes', methods=['GET'])
 def get_double_outcomes():
     """Return double_outcomes.json contents"""
@@ -535,16 +528,9 @@ def get_double_outcomes():
         print(f"[API] Error returning double outcomes: {e}")
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/api/checkout/recommend', methods=['POST'])
 def get_checkout_recommendation():
-    """
-    Get checkout recommendation for a given score and average range
-    Request body: {
-        "score": int (2-170),
-        "average_range": str (e.g., "30-39", "40-49")
-    }
-    """
+    # Get checkout recommendation for a given score and average range
     data = request.get_json()
     
     if not data:
@@ -602,26 +588,11 @@ def get_checkout_recommendation():
         print(f"[API] Error getting checkout recommendation: {e}")
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/api/approach/suggest', methods=['POST'])
 def suggest_approach_segment():
     """
     Suggest the best starting segment for approach play on high scores (>170).
     Analyzes all treble segments and finds which leaves the best finishing positions.
-    
-    Request body: {
-        "score": int (typically > 170),
-        "out_rule": str ("straight" or "double", default "double"),
-        "darts_available": int (1-3, default 3)
-    }
-    
-    Response: {
-        "segment": int (1-20),
-        "target": str (e.g. "t20", "s19"),
-        "reason": str,
-        "approach_play": bool,
-        "alternatives": [{"segment": int, "quality": int}, ...]
-    }
     """
     data = request.get_json()
     
@@ -650,18 +621,9 @@ def suggest_approach_segment():
         print(f"[API] Error getting approach suggestion: {e}")
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/api/bot/strategy', methods=['POST'])
 def get_bot_strategy():
-    """
-    Get bot throw strategy based on level and current score
-    Request body: {
-        "level": int (1-18),
-        "current_score": int,
-        "out_rule": str ("straight" or "double"),
-        "average_range": str (optional, default "30-39")
-    }
-    """
+    # Get bot throw strategy based on level and current score
     data = request.get_json()
     
     if not data:

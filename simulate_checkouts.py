@@ -15,7 +15,7 @@ BIN_END = 110
 BIN_WIDTH = 10
 MIN_EMPIRICAL_SAMPLES = 10  # minimum aimed at samples to use empirical distribution
 
-# Board order (clockwise) for neighbors
+# Board order (clockwise) for neighbours
 BOARD_ORDER = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5] # store dartboard ordering clockwise to find realistic neighbours
 NUM_SEGMENTS = len(BOARD_ORDER)
 segment_index = {n: i for i, n in enumerate(BOARD_ORDER)}
@@ -180,7 +180,7 @@ prioritised_aims = [f't{n}' for n in range(20,11,-1)] + [f'o{n}' for n in [20,19
 
 # Build P(actual_bed|aim, avg)
 # if empirical samples for aim >= MIN_EMPIRICAL_SAMPLES then use empirical distribution
-# else fallback: construct distribution: P(hit aimed bed) = model_p * type_multiplier, rest split to neighbors
+# else fallback: construct distribution: P(hit aimed bed) = model_p * type_multiplier, rest split to neighbours
 
 def build_distribution_for_aim(aimed, avg):
     aimed = aimed.lower()
@@ -212,18 +212,18 @@ def build_distribution_for_aim(aimed, avg):
     dist = {}
     # primary hit
     dist[aimed] = p_hit
-    # remaining probability distribute among neighbor singles and same number single/double
+    # remaining probability distribute among neighbour singles and same number single/double
     rem = 1.0 - p_hit
-    neighbors = []
+    neighbours = []
     if target_num is not None and target_num in segment_index:
         idx = segment_index[target_num]
         left = BOARD_ORDER[(idx - 1) % NUM_SEGMENTS]
         right = BOARD_ORDER[(idx + 1) % NUM_SEGMENTS]
-        neighbors = [f'i{left}', f'i{right}']
+        neighbours = [f'i{left}', f'i{right}']
     same_num = []
     if target_num is not None:
         same_num = [f'i{target_num}', f'd{target_num}']
-    choices = neighbors + same_num
+    choices = neighbours + same_num
     if not choices:
         choices = ['o20']
     per = rem / len(choices)
@@ -255,7 +255,7 @@ for label, rep in bins:
         d[aimed] = build_distribution_for_aim(aimed, rep)
     bin_distributions[label] = d
 
-# Compute doubles outcomes per bin: hit double, miss inside (o/i), miss outside (m/bounceout), neighbors (singles/doubles on neighbouring numbers), and other
+# Compute doubles outcomes per bin: hit double, miss inside (o/i), miss outside (m/bounceout), neighbours (singles/doubles on neighbouring numbers), and other
 def scale_double_outcomes_by_avg(base_outcomes: dict, target_avg: float, dataset_avg: float) -> dict:
     """
     Scale pooled double outcomes based on target average vs dataset average.
@@ -268,7 +268,7 @@ def scale_double_outcomes_by_avg(base_outcomes: dict, target_avg: float, dataset
     base_hit = base_outcomes['hit_double']
     base_miss_inside = base_outcomes['miss_inside']
     base_miss_outside = base_outcomes['miss_outside']
-    base_neighbor = base_outcomes['neighbor_singledouble']
+    base_neighbour = base_outcomes['neighbour_singledouble']
     base_other = base_outcomes['other']
     
     # Calculate scaling factor using double multiplier and average difference
@@ -281,34 +281,34 @@ def scale_double_outcomes_by_avg(base_outcomes: dict, target_avg: float, dataset
     hit_increase = new_hit - base_hit
     
     # Redistribute: take from misses proportionally
-    total_misses = base_miss_inside + base_miss_outside + base_neighbor + base_other
+    total_misses = base_miss_inside + base_miss_outside + base_neighbour + base_other
     if total_misses > 0 and hit_increase != 0:
         reduction_factor = (total_misses - hit_increase) / total_misses if hit_increase > 0 else (total_misses + abs(hit_increase)) / total_misses
         reduction_factor = max(0.0, reduction_factor)
         new_miss_inside = base_miss_inside * reduction_factor
         new_miss_outside = base_miss_outside * reduction_factor
-        new_neighbor = base_neighbor * reduction_factor
+        new_neighbour = base_neighbour * reduction_factor
         new_other = base_other * reduction_factor
     else:
         new_miss_inside = base_miss_inside
         new_miss_outside = base_miss_outside
-        new_neighbor = base_neighbor
+        new_neighbour = base_neighbour
         new_other = base_other
     
     # Normalize to ensure sum = 1.0
-    total = new_hit + new_miss_inside + new_miss_outside + new_neighbor + new_other
+    total = new_hit + new_miss_inside + new_miss_outside + new_neighbour + new_other
     if total > 0:
         new_hit /= total
         new_miss_inside /= total
         new_miss_outside /= total
-        new_neighbor /= total
+        new_neighbour /= total
         new_other /= total
     
     return {
         'hit_double': new_hit,
         'miss_inside': new_miss_inside,
         'miss_outside': new_miss_outside,
-        'neighbor_singledouble': new_neighbor,
+        'neighbour_singledouble': new_neighbour,
         'other': new_other,
         'samples': base_outcomes['samples']
     }
@@ -320,19 +320,19 @@ def aggregate_double_outcomes(counter: Counter, n: int, label: str):
             'hit_double': 0.0,
             'miss_inside': 0.0,
             'miss_outside': 0.0,
-            'neighbor_singledouble': 0.0,
+            'neighbour_singledouble': 0.0,
             'other': 0.0,
             'samples': 0
         }
-    # Neighbors for number n
-    neighbor_nums = []
+    # Neighbours for number n
+    neighbour_nums = []
     if n in segment_index:
         idx = segment_index[n]
         left = BOARD_ORDER[(idx - 1) % NUM_SEGMENTS]
         right = BOARD_ORDER[(idx + 1) % NUM_SEGMENTS]
-        neighbor_nums = [left, right]
+        neighbour_nums = [left, right]
 
-    def is_neighbor_sd(bed: str):
+    def is_neighbour_sd(bed: str):
         if len(bed) < 2:
             return False
         typ = bed[0]
@@ -340,31 +340,31 @@ def aggregate_double_outcomes(counter: Counter, n: int, label: str):
             val = int(bed[1:])
         except:
             return False
-        return (typ in ('i','o','d')) and (val in neighbor_nums)
+        return (typ in ('i','o','d')) and (val in neighbour_nums)
 
     hit = counter.get(f'd{n}', 0)
     inside = counter.get(f'o{n}', 0) + counter.get(f'i{n}', 0)
     outside = counter.get(f'm{n}', 0) + counter.get('bounceout', 0) + counter.get('m', 0)
-    neighbor = 0
+    neighbour = 0
     for bed, c in counter.items():
-        if is_neighbor_sd(bed):
-            neighbor += c
-    # Avoid double counting hit/inside/outside within neighbor
+        if is_neighbour_sd(bed):
+            neighbour += c
+    # Avoid double counting hit/inside/outside within neighbour
     # Subtract any contributions already counted
-    neighbor -= counter.get(f'd{n}', 0)
-    neighbor -= counter.get(f'o{n}', 0)
-    neighbor -= counter.get(f'i{n}', 0)
+    neighbour -= counter.get(f'd{n}', 0)
+    neighbour -= counter.get(f'o{n}', 0)
+    neighbour -= counter.get(f'i{n}', 0)
 
     # clamp
-    neighbor = max(0, neighbor)
+    neighbour = max(0, neighbour)
 
-    covered = hit + inside + outside + neighbor
+    covered = hit + inside + outside + neighbour
     other = max(0, total - covered)
     return {
         'hit_double': hit/total,
         'miss_inside': inside/total,
         'miss_outside': outside/total,
-        'neighbor_singledouble': neighbor/total,
+        'neighbour_singledouble': neighbour/total,
         'other': other/total,
         'samples': total
     }
@@ -373,14 +373,14 @@ def model_double_outcomes(n: int, rep_avg: float, sample_total: int = 0):
     # Use fallback model distribution and aggregate into categories
     aimed = f'd{n}'
     dist = build_distribution_for_aim(aimed, rep_avg)
-    # Neighbors
-    neighbor_nums = []
+    # Neighbours
+    neighbour_nums = []
     if n in segment_index:
         idx = segment_index[n]
         left = BOARD_ORDER[(idx - 1) % NUM_SEGMENTS]
         right = BOARD_ORDER[(idx + 1) % NUM_SEGMENTS]
-        neighbor_nums = [left, right]
-    def is_neighbor_sd_key(key: str):
+        neighbour_nums = [left, right]
+    def is_neighbour_sd_key(key: str):
         if len(key) < 2:
             return False
         typ = key[0]
@@ -388,25 +388,25 @@ def model_double_outcomes(n: int, rep_avg: float, sample_total: int = 0):
             val = int(key[1:])
         except:
             return False
-        return (typ in ('i','o','d')) and (val in neighbor_nums)
+        return (typ in ('i','o','d')) and (val in neighbour_nums)
     hit = dist.get(f'd{n}', 0.0)
     inside = dist.get(f'o{n}', 0.0) + dist.get(f'i{n}', 0.0)
     outside = dist.get(f'm{n}', 0.0) + dist.get('bounceout', 0.0) + dist.get('m', 0.0)
     # Add small prior for outside miss when modeling (sparse data)
     outside += 0.02
-    neighbor = sum(p for k, p in dist.items() if is_neighbor_sd_key(k))
+    neighbour = sum(p for k, p in dist.items() if is_neighbour_sd_key(k))
     # subtract any overcounts
-    neighbor -= dist.get(f'd{n}', 0.0)
-    neighbor -= dist.get(f'o{n}', 0.0)
-    neighbor -= dist.get(f'i{n}', 0.0)
-    neighbor = max(0.0, neighbor)
-    covered = hit + inside + outside + neighbor
+    neighbour -= dist.get(f'd{n}', 0.0)
+    neighbour -= dist.get(f'o{n}', 0.0)
+    neighbour -= dist.get(f'i{n}', 0.0)
+    neighbour = max(0.0, neighbour)
+    covered = hit + inside + outside + neighbour
     other = max(0.0, 1.0 - covered)
     return {
         'hit_double': hit,
         'miss_inside': inside,
         'miss_outside': outside,
-        'neighbor_singledouble': neighbor,
+        'neighbour_singledouble': neighbour,
         'other': other,
         'samples': sample_total  # reflect actual attempts even if modeled
     }
@@ -420,7 +420,7 @@ def scale_double_outcomes_by_avg(base_outcomes: dict, target_avg: float, dataset
     base_hit = base_outcomes['hit_double']
     base_miss_inside = base_outcomes['miss_inside']
     base_miss_outside = base_outcomes['miss_outside']
-    base_neighbor = base_outcomes['neighbor_singledouble']
+    base_neighbour = base_outcomes['neighbour_singledouble']
     base_other = base_outcomes['other']
     
     # Calculate scaling factor using double multiplier and average difference
@@ -433,34 +433,34 @@ def scale_double_outcomes_by_avg(base_outcomes: dict, target_avg: float, dataset
     hit_increase = new_hit - base_hit
     
     # Redistribute: take from misses proportionally
-    total_misses = base_miss_inside + base_miss_outside + base_neighbor + base_other
+    total_misses = base_miss_inside + base_miss_outside + base_neighbour + base_other
     if total_misses > 0 and hit_increase != 0:
         reduction_factor = (total_misses - hit_increase) / total_misses if hit_increase > 0 else (total_misses + abs(hit_increase)) / total_misses
         reduction_factor = max(0.0, reduction_factor)
         new_miss_inside = base_miss_inside * reduction_factor
         new_miss_outside = base_miss_outside * reduction_factor
-        new_neighbor = base_neighbor * reduction_factor
+        new_neighbour = base_neighbour * reduction_factor
         new_other = base_other * reduction_factor
     else:
         new_miss_inside = base_miss_inside
         new_miss_outside = base_miss_outside
-        new_neighbor = base_neighbor
+        new_neighbour = base_neighbour
         new_other = base_other
     
     # Normalise to ensure sum = 1.0
-    total = new_hit + new_miss_inside + new_miss_outside + new_neighbor + new_other
+    total = new_hit + new_miss_inside + new_miss_outside + new_neighbour + new_other
     if total > 0:
         new_hit /= total
         new_miss_inside /= total
         new_miss_outside /= total
-        new_neighbor /= total
+        new_neighbour /= total
         new_other /= total
     
     return {
         'hit_double': new_hit,
         'miss_inside': new_miss_inside,
         'miss_outside': new_miss_outside,
-        'neighbor_singledouble': new_neighbor,
+        'neighbour_singledouble': new_neighbour,
         'other': new_other,
         'samples': base_outcomes['samples']
     }
@@ -473,27 +473,27 @@ def aggregate_bull_outcomes(counter: Counter, label: str):
             'hit_double': 0.0,
             'miss_inside': 0.0,
             'miss_outside': 0.0,
-            'neighbor_singledouble': 0.0,
+            'neighbour_singledouble': 0.0,
             'other': 0.0,
             'samples': 0
         }
     hit = counter.get('ibull', 0)
     inside = counter.get('obull', 0)
     outside = counter.get('bounceout', 0) + counter.get('m', 0)
-    # Treat any landing on a numbered single/double (i/o/d prefix) as a "neighbor" miss of the bull
-    neighbor = 0
+    # Treat any landing on a numbered single/double (i/o/d prefix) as a "neighbour" miss of the bull
+    neighbour = 0
     for bed, c in counter.items():
         if bed in ('ibull','obull','bounceout','m'):
             continue
         if len(bed) >= 2 and bed[0] in ('i','o','d') and bed[1:].isdigit():
-            neighbor += c
-    covered = hit + inside + outside + neighbor
+            neighbour += c
+    covered = hit + inside + outside + neighbour
     other = max(0, total - covered)
     return {
         'hit_double': hit/total,
         'miss_inside': inside/total,
         'miss_outside': outside/total,
-        'neighbor_singledouble': neighbor/total,
+        'neighbour_singledouble': neighbour/total,
         'other': other/total,
         'samples': total
     }
@@ -504,19 +504,19 @@ def model_bull_outcomes(rep_avg: float, sample_total: int = 0):
     inside = dist.get('obull', 0.0)
     outside = dist.get('bounceout', 0.0) + dist.get('m', 0.0)
     outside += 0.02  # small prior outside miss
-    neighbor = 0.0
+    neighbour = 0.0
     for k, p in dist.items():
         if k in ('ibull','obull','bounceout','m'):
             continue
         if len(k) >= 2 and k[0] in ('i','o','d') and k[1:].isdigit():
-            neighbor += p
-    covered = hit + inside + outside + neighbor
+            neighbour += p
+    covered = hit + inside + outside + neighbour
     other = max(0.0, 1.0 - covered)
     return {
         'hit_double': hit,
         'miss_inside': inside,
         'miss_outside': outside,
-        'neighbor_singledouble': neighbor,
+        'neighbour_singledouble': neighbour,
         'other': other,
         'samples': sample_total
     }
@@ -525,7 +525,7 @@ def compute_all_double_outcomes():
     # Calculate dataset average across all files
     total_avg = 0.0
     count_files = 0
-    for fname, avg, aimed_t20, hits_t20 in per_file_records:
+    for _, avg, _, _ in per_file_records:
         if avg is not None:
             total_avg += avg
             count_files += 1
@@ -628,7 +628,7 @@ def compute_success_prob_for_seq_given_T(seq, T, bin_label):
     return success
 
 # Calculate "safety" score: how forgiving is this sequence if you miss the first dart
-# Higher safety means neighbors leave you in a better position for finishing
+# Higher safety means neighbours leave you in a better position for finishing
 def calculate_safety_score(seq, T):
     if len(seq) < 2:
         return 1.0  # 1-dart finishes have inherent risk
@@ -639,21 +639,21 @@ def calculate_safety_score(seq, T):
     if first_score == 0:
         return 0.5  # Unknown first dart
     
-    # Get neighbors of the first aim
+    # Get neighbours of the first aim
     target_num = int(first_aim[1:]) if len(first_aim) > 1 and first_aim[1:].isdigit() else None
     if target_num is None or target_num not in segment_index:
-        return 0.7  # Can't determine neighbors, moderate safety
+        return 0.7  # Can't determine neighbours, moderate safety
     
     idx = segment_index[target_num]
     left_num = BOARD_ORDER[(idx - 1) % NUM_SEGMENTS]
     right_num = BOARD_ORDER[(idx + 1) % NUM_SEGMENTS]
     
-    # Calculate neighbor scores
-    neighbor_first_type = first_aim[0]  # t, d, i, or o
-    left_score = score_of(f'{neighbor_first_type}{left_num}')
-    right_score = score_of(f'{neighbor_first_type}{right_num}')
+    # Calculate neighbour scores
+    neighbour_first_type = first_aim[0]  # t, d, i, or o
+    left_score = score_of(f'{neighbour_first_type}{left_num}')
+    right_score = score_of(f'{neighbour_first_type}{right_num}')
     
-    # If hitting a neighbor still leaves a double on the board, it's safer
+    # If hitting a neighbour still leaves a double on the board, it's safer
     remaining_after_left = T - left_score
     remaining_after_right = T - right_score
     
@@ -661,10 +661,10 @@ def calculate_safety_score(seq, T):
     # Check if remaining scores allow a double finish
     for n in range(1, 21):
         if 2*n == remaining_after_left or 2*n == remaining_after_right:
-            safety = 0.9  # Good safety - neighbors leave doubles available
+            safety = 0.9  # Good safety - neighbours leave doubles available
             break
         if remaining_after_left in [1, 0] or remaining_after_right in [1, 0]:
-            safety = 0.3  # Poor safety - neighbors bust or can't finish
+            safety = 0.3  # Poor safety - neighbours bust or can't finish
             break
     
     return safety
@@ -781,7 +781,7 @@ with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8') as fh:
 
     with open(DOUBLES_CSV, 'w', newline='', encoding='utf-8') as fh:
         writer = csv.writer(fh)
-        writer.writerow(['bin','double','hit_double','miss_inside','miss_outside','neighbor_singledouble','other','samples'])
+        writer.writerow(['bin','double','hit_double','miss_inside','miss_outside','neighbour_singledouble','other','samples'])
         for label, doubles in double_outcomes.items():
             for dname, vals in doubles.items():
                 writer.writerow([
@@ -790,7 +790,7 @@ with open(OUTPUT_CSV, 'w', newline='', encoding='utf-8') as fh:
                     vals.get('hit_double', 0.0),
                     vals.get('miss_inside', 0.0),
                     vals.get('miss_outside', 0.0),
-                    vals.get('neighbor_singledouble', 0.0),
+                    vals.get('neighbour_singledouble', 0.0),
                     vals.get('other', 0.0),
                     vals.get('samples', 0)
                 ])

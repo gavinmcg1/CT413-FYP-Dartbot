@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, View, Platform } from 'react-native';
 import { Button, Card, Text, TextInput, useTheme } from 'react-native-paper';
 import { useRouter } from 'expo-router';
@@ -29,6 +29,7 @@ export default function HomeScreen() {
   const [playerName, setPlayerNameState] = useState('Player');
   const [nameInput, setNameInput] = useState('Player');
   const [isEditingName, setIsEditingName] = useState(true);
+  const nameInputRef = useRef<any>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -44,6 +45,22 @@ export default function HomeScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!isEditingName) return;
+    const timer = setTimeout(() => {
+      nameInputRef.current?.focus?.();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [isEditingName]);
+
+  const handleSaveName = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const saved = await setPlayerName(nameInput);
+    setPlayerNameState(saved);
+    setNameInput(saved);
+    setIsEditingName(false);
+  };
+
   const handleSelectMode = (modeId: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (modeId === 'record') {
@@ -58,47 +75,59 @@ export default function HomeScreen() {
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.colors.background }}>
-      <View style={{ padding: 24, paddingTop: 40, marginBottom: 20, position: 'relative' }}>
-        <View style={{ position: 'absolute', top: 40, right: 24, width: 150 }}>
-          {isEditingName ? (
-            <>
-              <TextInput
-                mode="outlined"
-                dense
-                label="Name"
-                value={nameInput}
-                onChangeText={setNameInput}
-                maxLength={24}
-              />
+    <ScrollView
+      style={{ flex: 1, backgroundColor: theme.colors.background }}
+      keyboardShouldPersistTaps="handled"
+    >
+      <View style={{ padding: 24, paddingTop: 40, marginBottom: 20 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+          <View style={{ flex: 1, paddingRight: 4 }}>
+            <Text variant="displaySmall" style={{ fontWeight: 'bold', marginBottom: 8, color: theme.colors.primary }}>
+              Dartbot
+            </Text>
+            <Text variant="bodyLarge" style={{ color: theme.colors.onSurfaceVariant, lineHeight: 24 }}>
+              Welcome, {playerName}
+            </Text>
+          </View>
+
+          <View style={{ width: 150 }}>
+            {isEditingName ? (
+              <>
+                <TextInput
+                  ref={nameInputRef}
+                  mode="outlined"
+                  dense
+                  label="Name"
+                  value={nameInput}
+                  onChangeText={setNameInput}
+                  maxLength={24}
+                  autoFocus
+                  returnKeyType="done"
+                  onSubmitEditing={handleSaveName}
+                />
+                <Button
+                  compact
+                  mode="contained"
+                  style={{ marginTop: 6, borderRadius: 8 }}
+                  onPress={handleSaveName}
+                >
+                  Save
+                </Button>
+              </>
+            ) : (
               <Button
                 compact
-                mode="contained"
-                style={{ marginTop: 6, borderRadius: 8 }}
-                onPress={async () => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  const saved = await setPlayerName(nameInput);
-                  setPlayerNameState(saved);
-                  setNameInput(saved);
-                  setIsEditingName(false);
+                mode="outlined"
+                onPress={() => {
+                  setNameInput(playerName);
+                  setIsEditingName(true);
                 }}
               >
-                Save
+                {playerName}
               </Button>
-            </>
-          ) : (
-            <Button compact mode="outlined" onPress={() => setIsEditingName(true)}>
-              {playerName}
-            </Button>
-          )}
+            )}
+          </View>
         </View>
-
-        <Text variant="displaySmall" style={{ fontWeight: 'bold', marginBottom: 8, color: theme.colors.primary }}>
-          Dartbot
-        </Text>
-        <Text variant="bodyLarge" style={{ color: theme.colors.onSurfaceVariant, lineHeight: 24 }}>
-          Welcome, {playerName}
-        </Text>
       </View>
 
       <View style={{ padding: 12 }}>
