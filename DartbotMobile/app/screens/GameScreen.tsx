@@ -685,6 +685,7 @@ export default function GameScreen() {
     userLegsWon: number;
     botLegsWon: number;
     recentLegWinners: Player[];
+    currentLegNumber: number;
     totalLegsPlayed: number;
     userSetsWon: number;
     botSetsWon: number;
@@ -845,6 +846,13 @@ export default function GameScreen() {
    */
   // Handle leg completion and reset for next leg
   const handleLegWin = (legWinner: Player) => {
+    const getLegStarter = (legNumber: number): Player => {
+      const isOddLeg = legNumber % 2 === 1;
+      return initialFirstPlayer === 'user'
+        ? (isOddLeg ? 'user' : 'dartbot')
+        : (isOddLeg ? 'dartbot' : 'user');
+    };
+
     setRecentLegWinners((prev) => [...prev, legWinner].slice(-6));
     const newUserLegsWon = legWinner === 'user' ? userLegsWon + 1 : userLegsWon;
     const newBotLegsWon = legWinner === 'dartbot' ? botLegsWon + 1 : botLegsWon;
@@ -883,7 +891,8 @@ export default function GameScreen() {
         setUserCheckoutDoubles(null);
         setBotCheckoutDarts(null);
         setBotCheckoutDoubles(null);
-        const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
+        const nextLegNumber = newUserLegsWon + newBotLegsWon + 1;
+        const nextFirstPlayer = getLegStarter(nextLegNumber);
         setCurrentPlayer(nextFirstPlayer);
         setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
         setUserThrows((current) => {
@@ -919,7 +928,8 @@ export default function GameScreen() {
       setBotCheckoutDarts(null);
       setBotCheckoutDoubles(null);
       // Alternate first player for next leg
-      const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
+      const nextLegNumber = newUserLegsWon + newBotLegsWon + 1;
+      const nextFirstPlayer = getLegStarter(nextLegNumber);
       setCurrentPlayer(nextFirstPlayer);
       setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
       // Use functional updates to get current array lengths
@@ -1018,7 +1028,8 @@ export default function GameScreen() {
     setBotCheckoutDarts(null);
     setBotCheckoutDoubles(null);
     // Alternate first player for next leg - swap who threw first each leg
-    const nextFirstPlayer = initialFirstPlayer === 'user' ? (currentLegNumber % 2 === 0 ? 'user' : 'dartbot') : (currentLegNumber % 2 === 0 ? 'dartbot' : 'user');
+    const nextLegNumber = newUserLegsWon + newBotLegsWon + 1;
+    const nextFirstPlayer = getLegStarter(nextLegNumber);
     setCurrentPlayer(nextFirstPlayer);
     setStatus(`Leg ${newUserLegsWon + newBotLegsWon + 1} starting. ${nextFirstPlayer === 'user' ? playerName : 'Dartbot'} throws first.`);
     // Mark where the next leg starts for per-leg calculations
@@ -1057,6 +1068,7 @@ export default function GameScreen() {
         userLegsWon,
         botLegsWon,
         recentLegWinners: [...recentLegWinners],
+        currentLegNumber,
         totalLegsPlayed,
         userSetsWon,
         botSetsWon,
@@ -1337,6 +1349,7 @@ export default function GameScreen() {
       setUserLegsWon(targetState.userLegsWon);
       setBotLegsWon(targetState.botLegsWon);
       setRecentLegWinners(targetState.recentLegWinners);
+      setCurrentLegNumber(targetState.currentLegNumber);
       totalLegsPlayedRef.current = targetState.totalLegsPlayed;
       setTotalLegsPlayed(targetState.totalLegsPlayed);
       setUserSetsWon(targetState.userSetsWon);
@@ -2028,6 +2041,8 @@ export default function GameScreen() {
 
       // Singles remap to neighbours (e.g. 20 -> 1/5/18/12)
       if (score >= 1 && score <= 20) {
+        // Avoid low-value micro-reductions that barely change outcome quality.
+        if (score <= 6) return [];
         return getSingleNeighbourSegments(score).filter((n) => n < score);
       }
 
@@ -2060,11 +2075,12 @@ export default function GameScreen() {
 
     if (!isAttemptingCheckout && finalThrow > 0) {
       const projectedNewDarts = dartsInCurrentLeg + 3;
-      const upperAvg = targetAvg * 1.25;
+      const upperAvg = targetAvg * 1.35;
       const lowerAvg = targetAvg * 0.75;
       const projectedAvgFor = (total: number) => ((currentLegTotal + total) / projectedNewDarts) * 3;
       const maxDartChanges = 2;
       let dartChanges = 0;
+      const reducedDartIndexes = new Set<number>();
       const isTrebleLikeScore = (score: number) => score >= 45 && score <= 60 && score % 3 === 0;
       const trebleLikeIndexes = originalDartScores
         .map((score, index) => ({ score, index }))
@@ -2082,7 +2098,9 @@ export default function GameScreen() {
       // Reduce by moving dart scores to neighbouring/lower outcomes
       // Disabled for level 10+ for now
       let projectedAvg = projectedAvgFor(finalThrow);
-      if (level < 10) {
+      const reduceTriggerChance = level <= 4 ? 0.2 : level <= 6 ? 0.3 : 0.4;
+      const shouldRunReduction = projectedAvg > (upperAvg + 4) && Math.random() < reduceTriggerChance;
+      if (level < 10 && shouldRunReduction) {
         while (projectedAvg > upperAvg && dartChanges < maxDartChanges) {
         let bestIdx = -1;
         let bestNewScore = -1;
@@ -2090,6 +2108,7 @@ export default function GameScreen() {
         let shouldUseRandomS20Split = false;
 
         for (let idx = 0; idx < adjustedDartScores.length; idx++) {
+          if (reducedDartIndexes.has(idx)) continue;
           const current = adjustedDartScores[idx];
           const options = getReduceOptions(current);
           for (const next of options) {
@@ -2100,13 +2119,17 @@ export default function GameScreen() {
 
             // Keep some S20 hits from always splitting to 1/5.
             if (current === 20 && (next === 1 || next === 5)) {
-              const keepS20Chance = level <= 4 ? 0.65 : level <= 6 ? 0.45 : 0.2;
+              const keepS20Chance = level <= 4 ? 0.85 : level <= 6 ? 0.7 : 0.45;
               if (Math.random() < keepS20Chance) {
                 continue;
               }
             }
 
             const drop = current - next;
+            // For single->single remaps, only allow meaningful downgrades.
+            if (current >= 1 && current <= 20 && drop < 5) {
+              continue;
+            }
             if (drop > bestDrop) {
               bestDrop = drop;
               bestIdx = idx;
@@ -2123,6 +2146,7 @@ export default function GameScreen() {
           bestNewScore = splitRoll < 0.5 ? 1 : 5;
         }
         adjustedDartScores[bestIdx] = bestNewScore;
+        reducedDartIndexes.add(bestIdx);
         finalThrow = adjustedDartScores.reduce((sum, s) => sum + s, 0);
         projectedAvg = projectedAvgFor(finalThrow);
         dartChanges++;
