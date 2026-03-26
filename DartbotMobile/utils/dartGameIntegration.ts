@@ -134,7 +134,7 @@ function getT20BaseHitProbability(): number {
   }
   
   console.warn('[T20HitProb] Simulation data not available, using fallback probability');
-  return 0.2; // Default 20% hit rate as fallback
+  return 0.07; // Default 7% hit rate as fallback
 }
 
 /**
