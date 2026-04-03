@@ -138,6 +138,10 @@ if len(data_points) >= 2:
     slope = cov_xy / var_x if var_x != 0 else 0.0
     intercept = mean_y - slope * mean_x
 
+# Dataset-wide average used as baseline when scaling empirical hit rates by player/bin average.
+valid_avgs = [avg for _, avg, _, _ in per_file_records if avg is not None]
+DATASET_AVG = (sum(valid_avgs) / len(valid_avgs)) if valid_avgs else 70.0
+
 # Compute type multipliers (trebles/doubles/singles) relative to t20 using empirical data
 # average hit rate for t* aims where available
 def avg_hit_rate_for_type(*prefixes):
@@ -179,27 +183,79 @@ all_aims.append('ibull')
 prioritised_aims = [f't{n}' for n in range(20,11,-1)] + [f'o{n}' for n in [20,19,18,17,16,15,14]] + [f'i{n}' for n in [20,19,18,17,16,15,14]]
 
 # Build P(actual_bed|aim, avg)
-# if empirical samples for aim >= MIN_EMPIRICAL_SAMPLES then use empirical distribution
-# else fallback: construct distribution: P(hit aimed bed) = model_p * type_multiplier, rest split to neighbours
+# Priority order:
+# 1) pooled empirical data across all players, with conservative average-based scaling
+# 2) model fallback using average-based hit-rate regression
 
-def build_distribution_for_aim(aimed, avg):
+def _normalise_counter(counter):
+    total = sum(counter.values())
+    if total <= 0:
+        return {}
+    return {bed: cnt / total for bed, cnt in counter.items()}
+
+def _scaled_empirical_distribution_for_avg(empirical_dist, aimed, avg):
+    """
+    Keep the empirical miss-shape, but scale only the direct-hit probability by average.
+    This preserves realistic miss patterns while still reflecting skill/average differences.
+    """
+    if not empirical_dist:
+        return empirical_dist
+
     aimed = aimed.lower()
-    # empirical
-    total = aim_counts.get(aimed, 0)
-    if total >= MIN_EMPIRICAL_SAMPLES:
-        counter = aim_empirical[aimed]
-        return {bed: cnt/total for bed, cnt in counter.items()}
-    # fallback model
+    base_hit = empirical_dist.get(aimed, 0.0)
+    if base_hit <= 0.0 or slope is None:
+        return empirical_dist
+
+    if aimed in ('ibull',):
+        type_mult = mult_double
+    elif aimed.startswith('t'):
+        type_mult = mult_treble
+    elif aimed.startswith('d'):
+        type_mult = mult_double
+    else:
+        type_mult = mult_single
+
+    avg_diff = avg - DATASET_AVG
+    # Conservative scaling to avoid unrealistic route swings.
+    scale_factor = 1.0 + (slope * avg_diff * type_mult)
+    scale_factor = max(0.8, min(1.25, scale_factor))
+
+    new_hit = max(0.0, min(0.98, base_hit * scale_factor))
+    delta = new_hit - base_hit
+
+    miss_mass = 1.0 - base_hit
+    if miss_mass <= 0.0:
+        return empirical_dist
+
+    new_miss_mass = max(0.0, miss_mass - delta)
+    miss_scale = new_miss_mass / miss_mass
+
+    adjusted = {}
+    for bed, p in empirical_dist.items():
+        if bed == aimed:
+            adjusted[bed] = new_hit
+        else:
+            adjusted[bed] = p * miss_scale
+
+    total = sum(adjusted.values())
+    if total > 0:
+        return {k: v / total for k, v in adjusted.items()}
+    return empirical_dist
+
+def _build_model_distribution_for_aim(aimed, avg):
+    aimed = aimed.lower()
     # determine target type and number
-    if aimed in ('obull','ibull'):
+    if aimed in ('obull', 'ibull'):
         target_num = 25
         typ = 'i' if aimed == 'ibull' else 'o'
     else:
         typ = aimed[0]
-        target_num = int(aimed[1:]) if len(aimed)>1 and aimed[1:].isdigit() else None
+        target_num = int(aimed[1:]) if len(aimed) > 1 and aimed[1:].isdigit() else None
+
     # compute base p_hit for t20 at this avg
     p_hit_t20 = slope * avg + intercept if slope is not None else 0.2
     p_hit_t20 = max(0.0, min(1.0, p_hit_t20))
+
     # choose multiplier
     if typ == 't':
         mult = mult_treble
@@ -207,11 +263,11 @@ def build_distribution_for_aim(aimed, avg):
         mult = mult_double
     else:
         mult = mult_single
+
     p_hit = p_hit_t20 * mult
     p_hit = max(0.0, min(0.99, p_hit))
-    dist = {}
-    # primary hit
-    dist[aimed] = p_hit
+    dist = {aimed: p_hit}
+
     # remaining probability distribute among neighbour singles and same number single/double
     rem = 1.0 - p_hit
     neighbours = []
@@ -228,8 +284,20 @@ def build_distribution_for_aim(aimed, avg):
         choices = ['o20']
     per = rem / len(choices)
     for c in choices:
-        dist[c] = dist.get(c,0)+per
+        dist[c] = dist.get(c, 0) + per
     return dist
+
+def build_distribution_for_aim(aimed, avg, bin_label=None):
+    aimed = aimed.lower()
+    # 1) Pooled empirical if sufficiently sampled, scaled by average level conservatively
+    total = aim_counts.get(aimed, 0)
+    if total >= MIN_EMPIRICAL_SAMPLES:
+        counter = aim_empirical[aimed]
+        empirical_dist = _normalise_counter(counter)
+        return _scaled_empirical_distribution_for_avg(empirical_dist, aimed, avg)
+
+    # 2) Model fallback
+    return _build_model_distribution_for_aim(aimed, avg)
 
 # Build per bin distributions for all aim targets I will consider
 bins = []
@@ -252,7 +320,7 @@ bin_distributions = {}  # store precomputed probabilities for each aim target at
 for label, rep in bins:
     d = {}
     for aimed in aim_targets_to_consider:
-        d[aimed] = build_distribution_for_aim(aimed, rep)
+        d[aimed] = build_distribution_for_aim(aimed, rep, label)
     bin_distributions[label] = d
 
 # Compute doubles outcomes per bin: hit double, miss inside (o/i), miss outside (m/bounceout), neighbours (singles/doubles on neighbouring numbers), and other
@@ -596,7 +664,11 @@ def compute_success_prob_for_seq_given_T(seq, T, bin_label):
         aimed = aimed.lower()
         if aimed not in dist_map:
             # build on the fly
-            probs = build_distribution_for_aim(aimed, float(bin_label.split('-')[0]) if '-' in bin_label else BIN_END)
+            probs = build_distribution_for_aim(
+                aimed,
+                float(bin_label.split('-')[0]) if '-' in bin_label else BIN_END,
+                bin_label
+            )
         else:
             probs = dist_map[aimed]
         for rem, p_rem in list(states.items()):

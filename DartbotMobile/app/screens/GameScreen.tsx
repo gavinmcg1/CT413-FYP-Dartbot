@@ -1641,7 +1641,7 @@ export default function GameScreen() {
     const currentLegTotal = currentLegThrows.reduce((a, b) => a + b, 0);
     const requiresDoubleIn = inRule === 'double' && !botHasHitDoubleIn;
 
-    const randomDoubleInTargetForTurn = Math.random() < 0.5 ? 'd20' : 'd16';
+    const randomDoubleInTargetForTurn = Math.random() < 0.5 ? 'd20' : 'd16'; // either chooses d20 or d16 as the double in target for the turn, which are common and give some variety
 
     // Dynamically choose targets per dart based on live score (checkout vs approach)
     if (requiresDoubleIn) {
