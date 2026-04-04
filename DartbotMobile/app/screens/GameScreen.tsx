@@ -541,6 +541,7 @@ export default function GameScreen() {
   const usePersonalityModel = usePressureModel;
   const level = parseInt(params.level as string, 10) || 10; // 1-18 from setup screen
   const botPersonality = useMemo<BotPersonality>(() => getRandomBotPersonality(level), [level]);
+  const activeBotPersonality = botPersonality;
   const formatType = (params.formatType as string) || 'First To'; // "Best Of" or "First To"
   const legOrSet = (params.legOrSet as string) || 'Legs'; // "Legs" or "Sets"
   const formatNumber = parseInt(params.formatNumber as string, 10) || 1; // e.g., 3, 5, 7
@@ -1727,14 +1728,14 @@ export default function GameScreen() {
                   recommendation,
                   remainingDartsInTurn,
                   scoreLeft,
-                  usePersonalityModel ? botPersonality : 'steady',
+                  usePersonalityModel ? activeBotPersonality : 'steady',
                   userScore
                 );
                 if (bestSequence) {
                   const parts = bestSequence.split(',');
                   targetToken = parts[0] ?? 't20';
                   isFromSequence = true;
-                  console.log(`[BOT] Optimal sequence for ${scoreLeft} with ${remainingDartsInTurn} darts (${usePersonalityModel ? botPersonality : 'off'}): ${bestSequence}, using first dart: ${targetToken}`);
+                  console.log(`[BOT] Optimal sequence for ${scoreLeft} with ${remainingDartsInTurn} darts (${usePersonalityModel ? activeBotPersonality : 'off'}): ${bestSequence}, using first dart: ${targetToken}`);
                 } else {
                   // No valid sequence with remaining darts.
                   // With one dart left, request an approach/setup suggestion (handles bogey scores).
@@ -1789,7 +1790,7 @@ export default function GameScreen() {
             // Score > 170: Use approach play to find best starting segment
             // Approach play identifies segments that leave better finishing positions
             console.log(`[BOT] Route: scoreLeft > 170 (${scoreLeft}), calling approach play API...`);
-            if (usePersonalityModel && botPersonality === 'risky') {
+            if (usePersonalityModel && activeBotPersonality === 'risky') {
               targetToken = 't20';
               isFromSequence = false;
               shouldApplyVariance = false;
@@ -1836,7 +1837,7 @@ export default function GameScreen() {
           const intendedWithVariance = (isFromSequence || !shouldApplyVariance)
             ? intended
             : !(outRule === 'double' && scoreLeft <= 60)
-              ? (usePersonalityModel && botPersonality === 'steady' && Math.random() < 0.6
+              ? (usePersonalityModel && activeBotPersonality === 'steady' && Math.random() < 0.6
                   ? intended
                   : applyIntendedHitVariance(intended, level))
               : intended;
@@ -1887,7 +1888,7 @@ export default function GameScreen() {
                 totalLegsPlayed,
                 recentLegWinners,
                 isAimingAtDouble,
-                personality: botPersonality,
+                personality: activeBotPersonality,
               })
             : null;
 
@@ -1905,7 +1906,7 @@ export default function GameScreen() {
           // Pass previous dart for "following the marker" bonus
           const previousDart = i > 0 ? darts[i - 1] : null;
           let finalIntendedTarget = intendedWithVariance;
-          if (usePersonalityModel && botPersonality === 'nervy' && pressureAdjustment && pressureAdjustment.anxiety >= 0.65) {
+          if (usePersonalityModel && activeBotPersonality === 'nervy' && pressureAdjustment && pressureAdjustment.anxiety >= 0.65) {
             const driftChance = 0.2 + Math.max(0, pressureAdjustment.anxiety - 0.65) * 0.5;
             if (Math.random() < driftChance) {
               if (/^T20$/i.test(finalIntendedTarget)) {
@@ -2304,7 +2305,7 @@ export default function GameScreen() {
               Pressure Model: {usePressureModel ? 'ON' : 'OFF'}
             </Text>
             <Text variant="labelSmall" style={{ color: theme.colors.primary, marginTop: 2, textAlign: 'center' }}>
-              Personality: {usePersonalityModel ? formatPersonalityLabel(botPersonality) : 'OFF'}
+              Personality: {usePersonalityModel ? formatPersonalityLabel(activeBotPersonality) : 'OFF'}
             </Text>
           </View>
           <Button

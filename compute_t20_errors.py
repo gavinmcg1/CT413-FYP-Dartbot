@@ -3,7 +3,7 @@ import csv
 from collections import defaultdict
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-folder = os.path.join(script_dir, 'T20 Datasets')
+folder = os.path.join(script_dir, 'T20_Datasets')
 output = {}
 
 csv_files = [f for f in os.listdir(folder) if f.lower().endswith('.csv')]
